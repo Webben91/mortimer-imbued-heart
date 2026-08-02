@@ -332,6 +332,7 @@ public class MortimerHeartPlugin extends Plugin
 			case STRENGTH:
 			case RANGED:
 			case MAGIC:
+			case SLAYER:
 				updateClientSnapshot();
 				break;
 			default:
@@ -345,6 +346,10 @@ public class MortimerHeartPlugin extends Plugin
 		if (event.getVarbitId() == VarbitID.CA_THRESHOLD_ELITE)
 		{
 			updateEliteCaFromClient();
+		}
+		else if (event.getVarbitId() == VarbitID.SLAYER_POINTS)
+		{
+			updateClientSnapshot();
 		}
 	}
 
@@ -738,6 +743,8 @@ public class MortimerHeartPlugin extends Plugin
 		int strength = client.getRealSkillLevel(Skill.STRENGTH);
 		int ranged = client.getRealSkillLevel(Skill.RANGED);
 		int magic = client.getRealSkillLevel(Skill.MAGIC);
+		int slayer = client.getRealSkillLevel(Skill.SLAYER);
+		int slayerPoints = client.getVarbitValue(VarbitID.SLAYER_POINTS);
 		updateEliteCaFromClient();
 		SwingUtilities.invokeLater(() ->
 		{
@@ -745,6 +752,7 @@ public class MortimerHeartPlugin extends Plugin
 			{
 				panel.setClientSnapshot(attack, strength, ranged, magic, equippedCount);
 				panel.setDetectedBracelet(bracelet);
+				panel.setRoutingContext(slayer, slayerPoints);
 			}
 		});
 	}

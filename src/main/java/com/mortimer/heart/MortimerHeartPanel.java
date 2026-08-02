@@ -6,7 +6,6 @@ import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Rectangle;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
@@ -44,6 +43,9 @@ final class MortimerHeartPanel extends PluginPanel
 	private final JPanel flow = new JPanel();
 	private final JPanel offersContainer = new JPanel();
 	private final JPanel offersHeader = new JPanel(new BorderLayout());
+	private final JPanel routingCard;
+	private final JLabel routingTitle = new JLabel();
+	private final JLabel routingDetails = new JLabel();
 	private final JPanel grindCard;
 	private final JPanel emptyCard;
 	private final JPanel activeTaskCard;
@@ -83,6 +85,8 @@ final class MortimerHeartPanel extends PluginPanel
 	private boolean showMonsterVariants;
 	private boolean updatingVariantSelector;
 	private double currentActualDps;
+	private int slayerLevel = 99;
+	private int slayerPoints;
 
 	MortimerHeartPanel(boolean eliteCombatAchievements, boolean showMonsterVariants, Runnable undoLastGrind,
 		TaskPerformanceService performance, Consumer<SuperiorOption> variantSelectionAction,
@@ -137,6 +141,22 @@ final class MortimerHeartPanel extends PluginPanel
 		offersContainer.setLayout(new BoxLayout(offersContainer, BoxLayout.Y_AXIS));
 		offersContainer.setOpaque(false);
 		offersContainer.setAlignmentX(LEFT_ALIGNMENT);
+
+		routingCard = borderedCard(new Color(108, 86, 31), 1);
+		JPanel routingBody = verticalBody();
+		routingTitle.setForeground(GOLD);
+		routingTitle.setFont(FontManager.getRunescapeBoldFont());
+		routingTitle.setAlignmentX(LEFT_ALIGNMENT);
+		routingTitle.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+		routingBody.add(routingTitle);
+		routingBody.add(Box.createVerticalStrut(4));
+		routingDetails.setForeground(Color.WHITE);
+		routingDetails.setFont(FontManager.getRunescapeSmallFont());
+		routingDetails.setAlignmentX(LEFT_ALIGNMENT);
+		routingDetails.setMaximumSize(new Dimension(Integer.MAX_VALUE, 85));
+		routingBody.add(routingDetails);
+		routingCard.add(routingBody, BorderLayout.CENTER);
+		routingCard.setVisible(false);
 
 		activeTaskCard = borderedCard(GOLD, 2);
 		JPanel activeBody = verticalBody();
@@ -242,6 +262,10 @@ final class MortimerHeartPanel extends PluginPanel
 
 	void setEliteCa(boolean value)
 	{
+		if (eliteCa == value)
+		{
+			return;
+		}
 		eliteCa = value;
 		updateRulesSnapshot();
 		recalculate();
@@ -249,8 +273,26 @@ final class MortimerHeartPanel extends PluginPanel
 
 	void setDetectedBracelet(Bracelet bracelet)
 	{
-		detectedBracelet = bracelet == null ? Bracelet.NONE : bracelet;
+		Bracelet value = bracelet == null ? Bracelet.NONE : bracelet;
+		if (detectedBracelet == value)
+		{
+			return;
+		}
+		detectedBracelet = value;
 		updateRulesSnapshot();
+		recalculate();
+	}
+
+	void setRoutingContext(int newSlayerLevel, int newSlayerPoints)
+	{
+		int level = Math.max(1, newSlayerLevel);
+		int points = Math.max(0, newSlayerPoints);
+		if (slayerLevel == level && slayerPoints == points)
+		{
+			return;
+		}
+		slayerLevel = level;
+		slayerPoints = points;
 		recalculate();
 	}
 
@@ -328,6 +370,8 @@ final class MortimerHeartPanel extends PluginPanel
 		lastDetectedOffers = new ArrayList<>(detected);
 		offerCards.clear();
 		offersContainer.removeAll();
+		offersContainer.add(routingCard);
+		offersContainer.add(Box.createVerticalStrut(8));
 		int position = 1;
 		for (MortimerDetectedOffer offer : detected)
 		{
@@ -392,14 +436,77 @@ final class MortimerHeartPanel extends PluginPanel
 	{
 		recalculateActiveTask();
 		List<HeartResult> results = new ArrayList<>();
+		List<OfferState> routingOffers = new ArrayList<>();
 		for (OfferCard card : offerCards)
 		{
 			results.add(HeartCalculator.calculate(card.toOffer(), eliteCa));
+			routingOffers.add(card.toOffer(Bracelet.NONE));
 		}
-		HeartResult best = results.stream().max(Comparator.comparingDouble(HeartResult::getChancePerHour)).orElse(null);
+		RoutingDecision decision = OptimalRoutingCalculator.calculate(routingOffers, eliteCa, slayerLevel,
+			slayerPoints, lastDetectedOffers.size(), performance::killsPerHour);
+		renderRoutingDecision(decision, routingOffers);
 		for (int index = 0; index < results.size(); index++)
 		{
-			offerCards.get(index).renderResult(results.get(index), results.get(index) == best);
+			String badge = "";
+			if (decision != null)
+			{
+				if (decision.getType() == RoutingDecision.Type.POINT_SKIP
+					&& index == decision.getFastestFallbackIndex())
+				{
+					badge = "FASTEST FALLBACK";
+				}
+				else if (index == decision.getPrimaryIndex())
+				{
+					badge = decision.getType() == RoutingDecision.Type.FAST_REROLL
+						? "FAST REROLL · EXPEDITIOUS" : "RECOMMENDED";
+				}
+				else if (decision.getType() != RoutingDecision.Type.HUNT
+					&& index == decision.getBestHeartIndex())
+				{
+					badge = "BEST HEART OPTION";
+				}
+			}
+			offerCards.get(index).renderResult(results.get(index), badge);
+		}
+	}
+
+	private void renderRoutingDecision(RoutingDecision decision, List<OfferState> offers)
+	{
+		if (decision == null || offers.size() < 2)
+		{
+			routingCard.setVisible(false);
+			return;
+		}
+		routingCard.setVisible(true);
+		OfferState primary = offers.get(decision.getPrimaryIndex());
+		OfferState fallback = offers.get(decision.getFastestFallbackIndex());
+		String chance = percent(decision.getProbabilityBetterNext());
+		if (decision.getType() == RoutingDecision.Type.POINT_SKIP)
+		{
+			routingTitle.setText("SPEND 100 POINTS TO REROLL");
+			double fallbackHours = HeartCalculator.calculate(
+				new OfferState(fallback.getTask(), fallback.getSuperior(), fallback.getAmount(),
+					fallback.getDropModifier(), fallback.getKillsPerHour(), Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
+			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>All offers exceed the 120h target. "
+				+ html(fallback.getTask().getName()) + " is the fallback at " + hours(fallbackHours)
+				+ " with Expeditious.<br>Next offers have a " + chance + " chance to beat this set.</div></html>");
+		}
+		else if (decision.getType() == RoutingDecision.Type.FAST_REROLL)
+		{
+			double taskHours = HeartCalculator.calculate(
+				new OfferState(primary.getTask(), primary.getSuperior(), primary.getAmount(),
+					primary.getDropModifier(), primary.getKillsPerHour(), Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
+			routingTitle.setText("FAST REROLL · " + primary.getTask().getName().toUpperCase(Locale.ROOT));
+			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>Use an Expeditious bracelet · "
+				+ hours(taskHours) + " to new offers.<br>Next offers have a " + chance
+				+ " chance to beat this set. Keep your Slayer points.</div></html>");
+		}
+		else
+		{
+			routingTitle.setText("HUNT · " + primary.getTask().getName().toUpperCase(Locale.ROOT));
+			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>Best current Heart route. "
+				+ "Modelled route to Heart: " + hours(decision.getExpectedHours())
+				+ ".<br>Fresh-offer baseline: " + hours(decision.getFreshOfferHours()) + ".</div></html>");
 		}
 	}
 
@@ -666,18 +773,24 @@ final class MortimerHeartPanel extends PluginPanel
 
 		private OfferState toOffer()
 		{
-			HeartTask task = detected.getTask();
-			return new OfferState(task, superior, detected.getAmount(), detected.getDropModifier(),
-				performance.killsPerHour(task), detectedBracelet);
+			return toOffer(detectedBracelet);
 		}
 
-		private void renderResult(HeartResult calculated, boolean best)
+		private OfferState toOffer(Bracelet bracelet)
+		{
+			HeartTask task = detected.getTask();
+			return new OfferState(task, superior, detected.getAmount(), detected.getDropModifier(),
+				performance.killsPerHour(task), bracelet);
+		}
+
+		private void renderResult(HeartResult calculated, String badge)
 		{
 			updateSummary();
-			setBorder(new CompoundBorder(BorderFactory.createLineBorder(best ? GOLD : BORDER, best ? 2 : 1),
-				new EmptyBorder(best ? 8 : 9, best ? 8 : 9, best ? 8 : 9, best ? 8 : 9)));
-			bestBadge.setText(best ? "RECOMMENDED" : "");
-			bestBadge.setVisible(best);
+			boolean highlighted = badge != null && !badge.isEmpty();
+			setBorder(new CompoundBorder(BorderFactory.createLineBorder(highlighted ? GOLD : BORDER, highlighted ? 2 : 1),
+				new EmptyBorder(highlighted ? 8 : 9, highlighted ? 8 : 9, highlighted ? 8 : 9, highlighted ? 8 : 9)));
+			bestBadge.setText(highlighted ? badge : "");
+			bestBadge.setVisible(highlighted);
 			result.setText("<html><b>Heart this task</b>  " + percent(calculated.getTaskChance())
 				+ "<br><b>Heart chance / hour</b>  " + percent(calculated.getChancePerHour())
 				+ "<br><b>Task time</b>  " + hours(calculated.getTaskHours())

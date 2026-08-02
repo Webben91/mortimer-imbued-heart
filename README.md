@@ -5,6 +5,7 @@ A local RuneLite sidebar calculator for comparing Mortimer Slayer offers. It con
 ## Features
 
 - Compare one to three Mortimer offers.
+- Rank three strategies automatically: hunt the strongest Heart offer, rush the most efficient reroll with an Expeditious bracelet, or spend 100 Slayer points when every offer is both slow and outside the 120-hour target.
 - Calculate Heart chance for the task, Heart chance per hour, regular-kill rate, expected superiors, estimated task duration and on-rate hours to a Heart.
 - Detect the accepted Slayer task and assigned amount from RuneLite, count superior-spawn messages, then record it automatically when the in-game completion message appears.
 - Reconcile the active assignment from the login status message when a task was accepted on another RuneLite client; if that client never saw the Mortimer offer, the unavailable modifier is labelled honestly.
@@ -24,3 +25,5 @@ A local RuneLite sidebar calculator for comparing Mortimer Slayer offers. It con
 - Includes all supported Heart Slayer tasks and superior Heart rates locally.
 
 Without an override, the plugin uses its conservative planning KPH. DPS overrides use monster Hitpoints plus a two-second per-kill handling/respawn allowance; Wiki links also apply the configured multi-target Barrage/Burst and charged Venator multipliers before cannon DPS.
+
+The reroll model follows Mortimer's published task weights without replacement and samples assignment quantities and unlocked modifier ranges. Where Jagex has not published the relative odds of the five modifier categories, the model treats those categories as equally likely and labels the result as an estimate.
