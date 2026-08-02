@@ -1,0 +1,818 @@
+package com.mortimer.heart;
+
+import com.google.inject.Provides;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.geom.Path2D;
+import java.awt.image.BufferedImage;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import javax.inject.Inject;
+import javax.swing.SwingUtilities;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Actor;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.Client;
+import net.runelite.api.GameState;
+import net.runelite.api.InventoryID;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
+import net.runelite.api.NPC;
+import net.runelite.api.Skill;
+import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
+import net.runelite.api.events.InteractingChanged;
+import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.StatChanged;
+import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.events.WidgetLoaded;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.RuneScapeProfileChanged;
+import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDependency;
+import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.plugins.slayer.SlayerPlugin;
+import net.runelite.client.plugins.slayer.SlayerPluginService;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.NavigationButton;
+import okhttp3.OkHttpClient;
+
+@Slf4j
+@PluginDependency(SlayerPlugin.class)
+@PluginDescriptor(
+	name = "Mortimer Imbued Heart",
+	description = "Compare Mortimer Slayer offers and calculate Imbued Heart odds locally",
+	tags = {"slayer", "mortimer", "imbued heart", "drop rate", "calculator"}
+)
+public class MortimerHeartPlugin extends Plugin
+{
+	private static final String SLAYER_GROUP = "slayer";
+	private static final Pattern ASSIGNMENT_STATUS = Pattern.compile(
+		"you(?:'re| are) assigned to (?:kill |slay )?(.+?)(?:[;,.:]\\s*|\\s+only\\s+)(?:only\\s+)?([0-9,]+) more to go");
+
+	@Inject private Client client;
+	@Inject private ClientThread clientThread;
+	@Inject private ClientToolbar clientToolbar;
+	@Inject private ConfigManager configManager;
+	@Inject private MortimerHeartConfig config;
+	@Inject private OkHttpClient httpClient;
+	@Inject private ScheduledExecutorService executor;
+	@Inject private SlayerPluginService slayerPluginService;
+
+	private final MortimerWidgetReader widgetReader = new MortimerWidgetReader();
+	private MortimerHeartPanel panel;
+	private NavigationButton navigationButton;
+	private TaskPerformanceService performance;
+	private WikiDpsResolver wikiDpsResolver;
+	private int gameTickCounter;
+	private String lastImportSignature = "";
+	private List<GrindRecord> grindRecords = new ArrayList<>();
+	private List<MortimerDetectedOffer> lastDetectedOffers = new ArrayList<>();
+	private ActiveMortimerTask activeTask;
+	private boolean eliteCa;
+	private String measurementTaskName = "";
+	private int measurementStartRemaining = -1;
+	private long measurementStartedAt;
+	private String loadedRsProfileKey = "";
+
+	@Override
+	protected void startUp()
+	{
+		performance = new TaskPerformanceService(configManager);
+		wikiDpsResolver = new WikiDpsResolver(httpClient);
+		grindRecords = LocalGrindCodec.decode(config.localGrindData());
+		activeTask = ActiveMortimerTaskCodec.decode(config.activeTaskData());
+		SwingUtilities.invokeLater(() ->
+		{
+			panel = new MortimerHeartPanel(false, config.showMonsterVariants(), this::undoLastGrindRecord,
+				performance, this::selectActiveVariant, this::setActiveModifier);
+			panel.setGrindSummary(GrindSummary.from(grindRecords));
+			navigationButton = NavigationButton.builder()
+				.tooltip("Mortimer Imbued Heart")
+				.icon(createHeartIcon())
+				.priority(6)
+				.panel(panel)
+				.build();
+			clientToolbar.addNavigation(navigationButton);
+		});
+		clientThread.invoke(this::updateClientSnapshot);
+		resolveAllWikiLinks();
+		log.debug("Mortimer Imbued Heart started in local grind mode");
+	}
+
+	@Override
+	protected void shutDown()
+	{
+		if (navigationButton != null)
+		{
+			clientToolbar.removeNavigation(navigationButton);
+		}
+		panel = null;
+		navigationButton = null;
+		performance = null;
+		wikiDpsResolver = null;
+		lastImportSignature = "";
+		lastDetectedOffers = new ArrayList<>();
+		grindRecords = new ArrayList<>();
+	}
+
+	private void completeActiveTask()
+	{
+		if (activeTask == null)
+		{
+			return;
+		}
+		ActiveMortimerTask completed = activeTask;
+		grindRecords.add(completed.toRecord());
+		activeTask = null;
+		resetTaskMeasurement();
+		saveActiveTask();
+		saveGrindRecords();
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setGrindSummary(GrindSummary.from(grindRecords));
+					panel.setActiveTask(null, 0);
+					panel.setStatus(completed.getTaskName() + " completed and added automatically.", true);
+				}
+			});
+		}
+	}
+
+	private void cancelActiveTask(String reason)
+	{
+		if (activeTask == null)
+		{
+			return;
+		}
+		activeTask = null;
+		resetTaskMeasurement();
+		saveActiveTask();
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setActiveTask(null, 0);
+					panel.setStatus(reason, false);
+				}
+			});
+		}
+	}
+
+	private void undoLastGrindRecord()
+	{
+		if (grindRecords.isEmpty())
+		{
+			return;
+		}
+		GrindRecord removed = grindRecords.remove(grindRecords.size() - 1);
+		saveGrindRecords();
+		if (panel != null)
+		{
+			panel.setGrindSummary(GrindSummary.from(grindRecords));
+			panel.setStatus("Removed the last automatic task: " + removed.getTaskName() + ".", true);
+		}
+	}
+
+	private void saveGrindRecords()
+	{
+		String encoded = LocalGrindCodec.encode(grindRecords);
+		configManager.setConfiguration(MortimerHeartConfig.GROUP, "localGrindData", encoded);
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "localGrindData", encoded);
+		}
+	}
+
+	private void saveActiveTask()
+	{
+		String encoded = ActiveMortimerTaskCodec.encode(activeTask);
+		configManager.setConfiguration(MortimerHeartConfig.GROUP, "activeTaskData", encoded);
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "activeTaskData", encoded);
+		}
+	}
+
+	@Provides
+	MortimerHeartConfig provideConfig(ConfigManager manager)
+	{
+		return manager.getConfig(MortimerHeartConfig.class);
+	}
+
+	@Subscribe
+	public void onWidgetLoaded(WidgetLoaded event)
+	{
+		clientThread.invokeLater(this::scanMortimerScreen);
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick event)
+	{
+		gameTickCounter++;
+		if (gameTickCounter % 2 == 0)
+		{
+			scanMortimerScreen();
+		}
+		trackSlayerAssignment();
+		if (gameTickCounter % 5 == 0)
+		{
+			updateClientSnapshot();
+		}
+	}
+
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		if (event.getType() != ChatMessageType.GAMEMESSAGE && event.getType() != ChatMessageType.SPAM)
+		{
+			return;
+		}
+		String message = event.getMessage().replaceAll("<[^>]+>", "").toLowerCase(Locale.ROOT);
+		if (syncAssignmentFromMessage(message))
+		{
+			return;
+		}
+		if (message.contains("a superior foe has appeared"))
+		{
+			recordSuperiorRoll();
+		}
+		else if (message.contains("you have completed your task") || message.contains("you've completed your task"))
+		{
+			completeActiveTask();
+		}
+		else if (message.contains("cancelled your slayer task") || message.contains("canceled your slayer task")
+			|| message.contains("task has been cancelled") || message.contains("task has been canceled"))
+		{
+			cancelActiveTask("The active task was cancelled and was not added to the grind.");
+		}
+	}
+
+	@Subscribe
+	public void onInteractingChanged(InteractingChanged event)
+	{
+		if (activeTask == null || event.getSource() != client.getLocalPlayer())
+		{
+			return;
+		}
+		Actor target = event.getTarget();
+		if (!(target instanceof NPC))
+		{
+			return;
+		}
+		String npcName = ((NPC) target).getName();
+		HeartTask task = HeartData.findTask(activeTask.getTaskName());
+		if (task == null)
+		{
+			return;
+		}
+		for (SuperiorOption superior : task.getSuperiors())
+		{
+			if (superior.matchesMonster(npcName))
+			{
+				selectActiveVariant(superior);
+				return;
+			}
+		}
+	}
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		if (event.getGameState() == GameState.LOGGED_IN)
+		{
+			lastImportSignature = "";
+			clientThread.invokeLater(() ->
+			{
+				loadRsProfileState();
+				updateClientSnapshot();
+			});
+		}
+	}
+
+	@Subscribe
+	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
+	{
+		clientThread.invokeLater(this::loadRsProfileState);
+	}
+
+	@Subscribe
+	public void onItemContainerChanged(ItemContainerChanged event)
+	{
+		if (event.getContainerId() == InventoryID.EQUIPMENT.getId())
+		{
+			updateClientSnapshot();
+		}
+	}
+
+	@Subscribe
+	public void onStatChanged(StatChanged event)
+	{
+		switch (event.getSkill())
+		{
+			case ATTACK:
+			case STRENGTH:
+			case RANGED:
+			case MAGIC:
+				updateClientSnapshot();
+				break;
+			default:
+				break;
+		}
+	}
+
+	@Subscribe
+	public void onVarbitChanged(VarbitChanged event)
+	{
+		if (event.getVarbitId() == VarbitID.CA_THRESHOLD_ELITE)
+		{
+			updateEliteCaFromClient();
+		}
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!MortimerHeartConfig.GROUP.equals(event.getGroup()))
+		{
+			return;
+		}
+		if (event.getKey().endsWith("Dps"))
+		{
+			HeartTask task = taskForDpsKey(event.getKey());
+			if (task != null)
+			{
+				resolveWikiLink(task);
+			}
+		}
+		if ((event.getKey().endsWith("Dps") || event.getKey().endsWith("Cannon")) && panel != null)
+		{
+			SwingUtilities.invokeLater(panel::refreshCalculations);
+		}
+		if ("showMonsterVariants".equals(event.getKey()) && panel != null)
+		{
+			SwingUtilities.invokeLater(() -> panel.setShowMonsterVariants(config.showMonsterVariants()));
+		}
+	}
+
+	private void scanMortimerScreen()
+	{
+		List<MortimerDetectedOffer> offers = widgetReader.read(client);
+		if (!offers.isEmpty())
+		{
+			importDetectedOffers(offers, false);
+		}
+	}
+
+	private void importDetectedOffers(List<MortimerDetectedOffer> offers, boolean force)
+	{
+		String signature = offers.stream().map(offer -> offer.getTask().getName() + ':' + offer.getAmount()
+			+ ':' + offer.getDropModifier()).collect(Collectors.joining("|"));
+		if (!force && signature.equals(lastImportSignature))
+		{
+			return;
+		}
+		lastImportSignature = signature;
+		lastDetectedOffers = new ArrayList<>(offers);
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() -> panel.importOffers(offers));
+		}
+	}
+
+	private void trackSlayerAssignment()
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		String taskName = slayerPluginService.getTask();
+		int assigned = slayerPluginService.getInitialAmount();
+		int remaining = slayerPluginService.getRemainingAmount();
+		if (taskName == null || taskName.trim().isEmpty() || assigned <= 0)
+		{
+			taskName = profileValue("taskName");
+			assigned = profileInt("initialAmount");
+			remaining = profileInt("amount");
+		}
+		HeartTask current = HeartData.findTask(taskName);
+		if (current != null && assigned > 0)
+		{
+			MortimerDetectedOffer selected = lastDetectedOffers.stream()
+				.filter(offer -> offer.getTask().getName().equals(current.getName()))
+				.findFirst().orElse(null);
+			boolean taskChanged = activeTask == null || !activeTask.getTaskName().equals(current.getName());
+			if (taskChanged && (activeTask == null || selected != null))
+			{
+				SuperiorOption superior = current.getSuperiors().get(0);
+				activeTask = new ActiveMortimerTask(current.getName(), superior.getName(), assigned,
+					superior.getHeartRate(), selected == null ? -1.0 : selected.getDropModifier(),
+					eliteCa ? 150.0 : 200.0);
+				resetTaskMeasurement();
+				saveActiveTask();
+				lastDetectedOffers = new ArrayList<>();
+				lastImportSignature = "";
+				if (panel != null)
+				{
+					SwingUtilities.invokeLater(() -> panel.setStatus(current.getName()
+						+ " accepted. Completion will be recorded automatically.", true));
+				}
+			}
+			else if (activeTask != null && activeTask.getTaskName().equals(current.getName())
+				&& assigned >= remaining && assigned != activeTask.getAssignedAmount())
+			{
+				activeTask = activeTask.withAssignedAmount(assigned);
+				saveActiveTask();
+			}
+		}
+		if (panel != null && activeTask != null)
+		{
+			String displayName = activeTask.getTaskName();
+			int displayAssigned = activeTask.getAssignedAmount();
+			int displayRemaining = current != null && current.getName().equals(displayName) ? remaining : displayAssigned;
+			updateTaskMeasurement(displayName, displayRemaining);
+			double actualDps = current == null || !current.getName().equals(displayName) ? 0.0 : performance.measuredDps(current,
+				Math.max(0, measurementStartRemaining - displayRemaining),
+				Math.max(0L, System.currentTimeMillis() - measurementStartedAt));
+			ActiveMortimerTask taskSnapshot = activeTask;
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setActiveTask(taskSnapshot, displayRemaining);
+					panel.setActualDps(actualDps);
+				}
+			});
+		}
+	}
+
+	private boolean syncAssignmentFromMessage(String message)
+	{
+		Matcher matcher = ASSIGNMENT_STATUS.matcher(message);
+		if (!matcher.find())
+		{
+			return false;
+		}
+		HeartTask detectedTask = HeartData.findTask(matcher.group(1));
+		if (detectedTask == null)
+		{
+			return false;
+		}
+		int remaining;
+		try
+		{
+			remaining = Integer.parseInt(matcher.group(2).replace(",", ""));
+		}
+		catch (NumberFormatException ignored)
+		{
+			return false;
+		}
+		MortimerDetectedOffer selected = lastDetectedOffers.stream()
+			.filter(offer -> offer.getTask().getName().equals(detectedTask.getName()))
+			.findFirst().orElse(null);
+		int profileAssigned = profileInt("initialAmount");
+		HeartTask profileTask = HeartData.findTask(profileValue("taskName"));
+		int assigned = profileTask != null && profileTask.getName().equals(detectedTask.getName())
+			&& profileAssigned >= remaining ? profileAssigned : remaining;
+		if (activeTask == null || !activeTask.getTaskName().equals(detectedTask.getName()))
+		{
+			SuperiorOption superior = detectedTask.getSuperiors().get(0);
+			activeTask = new ActiveMortimerTask(detectedTask.getName(), superior.getName(), assigned,
+				superior.getHeartRate(), selected == null ? -1.0 : selected.getDropModifier(),
+				eliteCa ? 150.0 : 200.0);
+			resetTaskMeasurement();
+			saveActiveTask();
+			lastDetectedOffers = new ArrayList<>();
+			lastImportSignature = "";
+		}
+		ActiveMortimerTask snapshot = activeTask;
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setActiveTask(snapshot, remaining);
+				}
+			});
+		}
+		return true;
+	}
+
+	private void selectActiveVariant(SuperiorOption superior)
+	{
+		if (activeTask == null || superior == null || superior.getName().equals(activeTask.getSuperiorName()))
+		{
+			return;
+		}
+		HeartTask task = HeartData.findTask(activeTask.getTaskName());
+		if (task == null || !task.getSuperiors().contains(superior))
+		{
+			return;
+		}
+		activeTask = activeTask.withSuperior(superior);
+		saveActiveTask();
+		int remaining = profileInt("amount");
+		ActiveMortimerTask snapshot = activeTask;
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setActiveTask(snapshot, remaining);
+				}
+			});
+		}
+	}
+
+	private void setActiveModifier(Double modifier)
+	{
+		if (activeTask == null || modifier == null || !Double.isFinite(modifier) || modifier < 0.0)
+		{
+			return;
+		}
+		activeTask = activeTask.withDropModifier(modifier);
+		saveActiveTask();
+		int remaining = slayerPluginService.getRemainingAmount();
+		if (remaining <= 0)
+		{
+			remaining = profileInt("amount");
+		}
+		ActiveMortimerTask snapshot = activeTask;
+		int displayRemaining = remaining > 0 ? remaining : snapshot.getAssignedAmount();
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setActiveTask(snapshot, displayRemaining);
+				}
+			});
+		}
+	}
+
+	private void updateTaskMeasurement(String taskName, int remaining)
+	{
+		if (!taskName.equals(measurementTaskName) || measurementStartRemaining < 0)
+		{
+			measurementTaskName = taskName;
+			measurementStartRemaining = remaining;
+			measurementStartedAt = System.currentTimeMillis();
+		}
+	}
+
+	private void resetTaskMeasurement()
+	{
+		measurementTaskName = "";
+		measurementStartRemaining = -1;
+		measurementStartedAt = 0L;
+	}
+
+	private void loadRsProfileState()
+	{
+		String profileKey = configManager.getRSProfileKey();
+		if (profileKey == null || profileKey.isEmpty() || profileKey.equals(loadedRsProfileKey))
+		{
+			return;
+		}
+		loadedRsProfileKey = profileKey;
+		String remoteGrind = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "localGrindData");
+		String remoteActive = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "activeTaskData");
+		if (remoteGrind == null || remoteGrind.trim().isEmpty())
+		{
+			saveGrindRecords();
+		}
+		else
+		{
+			grindRecords = LocalGrindCodec.decode(remoteGrind);
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "localGrindData", remoteGrind);
+		}
+		if (remoteActive == null || remoteActive.trim().isEmpty())
+		{
+			saveActiveTask();
+		}
+		else
+		{
+			activeTask = ActiveMortimerTaskCodec.decode(remoteActive);
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "activeTaskData", remoteActive);
+			resetTaskMeasurement();
+		}
+		if (panel != null)
+		{
+			GrindSummary summary = GrindSummary.from(grindRecords);
+			ActiveMortimerTask taskSnapshot = activeTask;
+			int remaining = slayerPluginService.getRemainingAmount();
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setGrindSummary(summary);
+					panel.setActiveTask(taskSnapshot, taskSnapshot == null ? 0
+						: remaining > 0 ? remaining : taskSnapshot.getAssignedAmount());
+				}
+			});
+		}
+	}
+
+	private void recordSuperiorRoll()
+	{
+		if (activeTask == null)
+		{
+			return;
+		}
+		activeTask = activeTask.withSuperiorRoll();
+		saveActiveTask();
+		int remaining = profileInt("amount");
+		ActiveMortimerTask snapshot = activeTask;
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setActiveTask(snapshot, remaining);
+				}
+			});
+		}
+	}
+
+	private String profileValue(String key)
+	{
+		String value = configManager.getRSProfileConfiguration(SLAYER_GROUP, key);
+		return value == null ? "" : value;
+	}
+
+	private int profileInt(String key)
+	{
+		try
+		{
+			return Integer.parseInt(profileValue(key));
+		}
+		catch (NumberFormatException ignored)
+		{
+			return 0;
+		}
+	}
+
+	private void resolveAllWikiLinks()
+	{
+		for (HeartTask task : HeartData.TASKS)
+		{
+			resolveWikiLink(task);
+		}
+	}
+
+	private void resolveWikiLink(HeartTask task)
+	{
+		if (performance == null || wikiDpsResolver == null)
+		{
+			return;
+		}
+		String link = performance.wikiLink(task);
+		if (link.isEmpty())
+		{
+			return;
+		}
+		executor.execute(() ->
+		{
+			try
+			{
+				WikiDpsResolver.Result result = wikiDpsResolver.resolve(link, task);
+				performance.saveResolved(task, link, result.getEffectiveDps());
+				log.debug("Resolved Wiki DPS for {} against {} at {} effective DPS ({}x)", task.getName(),
+					result.getMonsterName(), result.getEffectiveDps(), result.getMultiplier());
+				if (panel != null)
+				{
+					SwingUtilities.invokeLater(panel::refreshCalculations);
+				}
+			}
+			catch (Exception ex)
+			{
+				log.warn("Could not resolve Wiki DPS for {}: {}", task.getName(), ex.getMessage());
+			}
+		});
+	}
+
+	private static HeartTask taskForDpsKey(String key)
+	{
+		for (HeartTask task : HeartData.TASKS)
+		{
+			if ((TaskPerformanceService.key(task) + "Dps").equals(key))
+			{
+				return task;
+			}
+		}
+		return null;
+	}
+
+	private void updateClientSnapshot()
+	{
+		if (panel == null || client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		ItemContainer equipment = client.getItemContainer(InventoryID.EQUIPMENT);
+		int equippedCount = equipment == null ? 0 : equipment.count();
+		Bracelet bracelet = detectBracelet(equipment);
+		int attack = client.getRealSkillLevel(Skill.ATTACK);
+		int strength = client.getRealSkillLevel(Skill.STRENGTH);
+		int ranged = client.getRealSkillLevel(Skill.RANGED);
+		int magic = client.getRealSkillLevel(Skill.MAGIC);
+		updateEliteCaFromClient();
+		SwingUtilities.invokeLater(() ->
+		{
+			if (panel != null)
+			{
+				panel.setClientSnapshot(attack, strength, ranged, magic, equippedCount);
+				panel.setDetectedBracelet(bracelet);
+			}
+		});
+	}
+
+	private void updateEliteCaFromClient()
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		boolean detected = client.getVarbitValue(VarbitID.CA_THRESHOLD_ELITE) != 0;
+		if (detected == eliteCa)
+		{
+			return;
+		}
+		eliteCa = detected;
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setEliteCa(detected);
+				}
+			});
+		}
+	}
+
+	private static Bracelet detectBracelet(ItemContainer equipment)
+	{
+		if (equipment == null)
+		{
+			return Bracelet.NONE;
+		}
+		for (Item item : equipment.getItems())
+		{
+			if (item.getId() == ItemID.EXPEDITIOUS_BRACELET)
+			{
+				return Bracelet.EXPEDITIOUS;
+			}
+			if (item.getId() == ItemID.BRACELET_OF_SLAUGHTER)
+			{
+				return Bracelet.SLAUGHTER;
+			}
+		}
+		return Bracelet.NONE;
+	}
+
+	private static BufferedImage createHeartIcon()
+	{
+		BufferedImage image = new BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = image.createGraphics();
+		graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		Path2D heart = new Path2D.Double();
+		heart.moveTo(12, 21);
+		heart.curveTo(9, 18, 3, 14, 3, 8);
+		heart.curveTo(3, 3, 9, 2, 12, 6);
+		heart.curveTo(15, 2, 21, 3, 21, 8);
+		heart.curveTo(21, 14, 15, 18, 12, 21);
+		heart.closePath();
+		graphics.setColor(new Color(137, 28, 42));
+		graphics.fill(heart);
+		graphics.setStroke(new BasicStroke(2f));
+		graphics.setColor(new Color(226, 181, 70));
+		graphics.draw(heart);
+		graphics.setColor(new Color(244, 218, 151));
+		graphics.fillOval(7, 6, 4, 4);
+		graphics.dispose();
+		return image;
+	}
+}
