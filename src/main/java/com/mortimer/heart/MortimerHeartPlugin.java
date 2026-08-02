@@ -53,9 +53,9 @@ import okhttp3.OkHttpClient;
 @Slf4j
 @PluginDependency(SlayerPlugin.class)
 @PluginDescriptor(
-	name = "Mortimer Imbued Heart",
-	description = "Compare Mortimer Slayer offers and calculate Imbued Heart odds locally",
-	tags = {"slayer", "mortimer", "imbued heart", "drop rate", "calculator"}
+	name = "Mortimer Slayer",
+	description = "Compare Mortimer Slayer offers for Imbued Heart chance, Slayer XP, or a balance of both",
+	tags = {"slayer", "mortimer", "imbued heart", "experience", "drop rate", "calculator"}
 )
 public class MortimerHeartPlugin extends Plugin
 {
@@ -97,11 +97,12 @@ public class MortimerHeartPlugin extends Plugin
 		activeTask = ActiveMortimerTaskCodec.decode(config.activeTaskData());
 		SwingUtilities.invokeLater(() ->
 		{
-			panel = new MortimerHeartPanel(false, config.showMonsterVariants(), this::undoLastGrindRecord,
+			panel = new MortimerHeartPanel(false, config.showMonsterVariants(), config.preferredGrind(),
+				this::undoLastGrindRecord,
 				performance, this::selectActiveVariant, this::setActiveModifier);
 			panel.setGrindSummary(GrindSummary.from(grindRecords));
 			navigationButton = NavigationButton.builder()
-				.tooltip("Mortimer Imbued Heart")
+				.tooltip("Mortimer Slayer")
 				.icon(createHeartIcon())
 				.priority(6)
 				.panel(panel)
@@ -110,7 +111,7 @@ public class MortimerHeartPlugin extends Plugin
 		});
 		clientThread.invoke(this::updateClientSnapshot);
 		resolveAllWikiLinks();
-		log.debug("Mortimer Imbued Heart started in local grind mode");
+		log.debug("Mortimer Slayer started in local grind mode");
 	}
 
 	@Override
@@ -376,6 +377,10 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			SwingUtilities.invokeLater(() -> panel.setShowMonsterVariants(config.showMonsterVariants()));
 		}
+		if ("preferredGrind".equals(event.getKey()) && panel != null)
+		{
+			SwingUtilities.invokeLater(() -> panel.setGrindPreference(config.preferredGrind()));
+		}
 	}
 
 	private void scanMortimerScreen()
@@ -390,7 +395,7 @@ public class MortimerHeartPlugin extends Plugin
 	private void importDetectedOffers(List<MortimerDetectedOffer> offers, boolean force)
 	{
 		String signature = offers.stream().map(offer -> offer.getTask().getName() + ':' + offer.getAmount()
-			+ ':' + offer.getDropModifier()).collect(Collectors.joining("|"));
+			+ ':' + offer.getDropModifier() + ':' + offer.getXpModifier()).collect(Collectors.joining("|"));
 		if (!force && signature.equals(lastImportSignature))
 		{
 			return;

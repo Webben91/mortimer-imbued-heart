@@ -21,6 +21,17 @@ public interface MortimerHeartConfig extends Config
 		return true;
 	}
 
+	@ConfigItem(
+		keyName = "preferredGrind",
+		name = "Preferred grind",
+		description = "Choose whether task recommendations prioritise Imbued Heart chance, Slayer XP per hour, or an equal balance of both",
+		position = 1
+	)
+	default GrindPreference preferredGrind()
+	{
+		return GrindPreference.IMBUED_HEART;
+	}
+
 	@ConfigSection(
 		name = "Aberrant spectres",
 		description = "DPS and cannon settings for Aberrant spectres",

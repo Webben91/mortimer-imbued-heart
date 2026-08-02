@@ -192,7 +192,7 @@ final class OptimalRoutingCalculator
 	private static OfferState withBracelet(OfferState offer, Bracelet bracelet)
 	{
 		return new OfferState(offer.getTask(), offer.getSuperior(), offer.getAmount(), offer.getDropModifier(),
-			offer.getKillsPerHour(), bracelet);
+			offer.getXpModifier(), offer.getKillsPerHour(), bracelet);
 	}
 
 	private static MortimerRoutingData.Profile removeWeighted(Random random, List<MortimerRoutingData.Profile> pool)

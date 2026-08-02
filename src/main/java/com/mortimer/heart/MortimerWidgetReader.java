@@ -71,7 +71,8 @@ final class MortimerWidgetReader
 			int endY = index + 1 < taskLines.size() ? taskLines.get(index + 1).y - 4 : taskLine.y + 145;
 			int amount = taskLine.task.getPlanningAmount();
 			double modifier = 0;
-			String modifierText = "No Superior Unique modifier detected";
+			double xpModifier = 0;
+			String modifierText = "No Heart or XP modifier detected";
 			for (WidgetLine line : lines)
 			{
 				if (line.y < taskLine.y - 8 || line.y >= endY)
@@ -95,8 +96,17 @@ final class MortimerWidgetReader
 						modifierText = line.text;
 					}
 				}
+				else if (lineLower.contains("slayer experience") || lineLower.matches(".*\\bxp\\b.*"))
+				{
+					Matcher percentage = PERCENT_PATTERN.matcher(line.text);
+					if (percentage.find())
+					{
+						xpModifier = Math.max(0, Double.parseDouble(percentage.group(1).replace("+", "")));
+						modifierText = line.text;
+					}
+				}
 			}
-			offers.add(new MortimerDetectedOffer(taskLine.task, amount, modifier, modifierText));
+			offers.add(new MortimerDetectedOffer(taskLine.task, amount, modifier, xpModifier, modifierText));
 		}
 		return offers;
 	}

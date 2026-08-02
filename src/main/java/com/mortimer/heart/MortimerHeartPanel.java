@@ -87,13 +87,16 @@ final class MortimerHeartPanel extends PluginPanel
 	private double currentActualDps;
 	private int slayerLevel = 99;
 	private int slayerPoints;
+	private GrindPreference grindPreference;
 
-	MortimerHeartPanel(boolean eliteCombatAchievements, boolean showMonsterVariants, Runnable undoLastGrind,
+	MortimerHeartPanel(boolean eliteCombatAchievements, boolean showMonsterVariants, GrindPreference grindPreference,
+		Runnable undoLastGrind,
 		TaskPerformanceService performance, Consumer<SuperiorOption> variantSelectionAction,
 		Consumer<Double> modifierSelectionAction)
 	{
 		this.eliteCa = eliteCombatAchievements;
 		this.showMonsterVariants = showMonsterVariants;
+		this.grindPreference = grindPreference == null ? GrindPreference.IMBUED_HEART : grindPreference;
 		this.undoLastGrind = undoLastGrind;
 		this.performance = performance;
 		this.variantSelectionAction = variantSelectionAction;
@@ -106,10 +109,10 @@ final class MortimerHeartPanel extends PluginPanel
 		content.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		content.setBorder(new EmptyBorder(8, 4, 8, 4));
 
-		JLabel eyebrow = label("MORTIMER IMBUED HEART", GOLD, FontManager.getRunescapeSmallFont());
+		JLabel eyebrow = label("MORTIMER SLAYER", GOLD, FontManager.getRunescapeSmallFont());
 		eyebrow.setAlignmentX(LEFT_ALIGNMENT);
 		content.add(eyebrow);
-		JLabel title = label("Task Planner", Color.WHITE, FontManager.getRunescapeBoldFont());
+		JLabel title = label("Offer Planner", Color.WHITE, FontManager.getRunescapeBoldFont());
 		title.setFont(title.getFont().deriveFont(Font.BOLD, 18f));
 		title.setAlignmentX(LEFT_ALIGNMENT);
 		content.add(title);
@@ -339,6 +342,17 @@ final class MortimerHeartPanel extends PluginPanel
 		}
 	}
 
+	void setGrindPreference(GrindPreference value)
+	{
+		GrindPreference preference = value == null ? GrindPreference.IMBUED_HEART : value;
+		if (grindPreference == preference)
+		{
+			return;
+		}
+		grindPreference = preference;
+		recalculate();
+	}
+
 	void setGrindSummary(GrindSummary summary)
 	{
 		currentGrindSummary = summary;
@@ -437,18 +451,36 @@ final class MortimerHeartPanel extends PluginPanel
 		recalculateActiveTask();
 		List<HeartResult> results = new ArrayList<>();
 		List<OfferState> routingOffers = new ArrayList<>();
+		List<Double> xpRates = new ArrayList<>();
 		for (OfferCard card : offerCards)
 		{
 			results.add(HeartCalculator.calculate(card.toOffer(), eliteCa));
-			routingOffers.add(card.toOffer(Bracelet.NONE));
+			OfferState routingOffer = card.toOffer(Bracelet.NONE);
+			routingOffers.add(routingOffer);
+			xpRates.add(SlayerExperienceData.experiencePerHour(routingOffer));
 		}
-		RoutingDecision decision = OptimalRoutingCalculator.calculate(routingOffers, eliteCa, slayerLevel,
-			slayerPoints, lastDetectedOffers.size(), performance::killsPerHour);
-		renderRoutingDecision(decision, routingOffers);
+		RoutingDecision decision = grindPreference == GrindPreference.IMBUED_HEART
+			? OptimalRoutingCalculator.calculate(routingOffers, eliteCa, slayerLevel,
+				slayerPoints, lastDetectedOffers.size(), performance::killsPerHour)
+			: null;
+		int preferenceIndex = decision == null
+			? PreferenceRecommendationCalculator.bestIndex(routingOffers, eliteCa, grindPreference) : -1;
+		if (decision == null)
+		{
+			renderPreferenceDecision(preferenceIndex, results, routingOffers, xpRates);
+		}
+		else
+		{
+			renderRoutingDecision(decision, routingOffers);
+		}
 		for (int index = 0; index < results.size(); index++)
 		{
 			String badge = "";
-			if (decision != null)
+			if (decision == null && index == preferenceIndex)
+			{
+				badge = grindPreference == GrindPreference.SLAYER_XP ? "BEST SLAYER XP" : "BALANCED PICK";
+			}
+			else if (decision != null)
 			{
 				if (decision.getType() == RoutingDecision.Type.POINT_SKIP
 					&& index == decision.getFastestFallbackIndex())
@@ -466,7 +498,36 @@ final class MortimerHeartPanel extends PluginPanel
 					badge = "BEST HEART OPTION";
 				}
 			}
-			offerCards.get(index).renderResult(results.get(index), badge);
+			offerCards.get(index).renderResult(results.get(index), xpRates.get(index), badge);
+		}
+	}
+
+	private void renderPreferenceDecision(int index, List<HeartResult> results,
+		List<OfferState> offers, List<Double> xpRates)
+	{
+		if (index < 0 || offers.size() < 2)
+		{
+			routingCard.setVisible(false);
+			return;
+		}
+		routingCard.setVisible(true);
+		OfferState offer = offers.get(index);
+		HeartResult heart = results.get(index);
+		String task = offer.getTask().getName().toUpperCase(Locale.ROOT);
+		if (grindPreference == GrindPreference.SLAYER_XP)
+		{
+			routingTitle.setText("XP PICK · " + task);
+			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>"
+				+ number(xpRates.get(index)) + " Slayer XP/hr"
+				+ (offer.getXpModifier() > 0 ? " with +" + trim(offer.getXpModifier()) + "% XP" : "")
+				+ ".<br>Highest expected XP rate from these offers.</div></html>");
+		}
+		else
+		{
+			routingTitle.setText("BALANCED PICK · " + task);
+			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>"
+				+ number(xpRates.get(index)) + " Slayer XP/hr · " + hours(heart.getHoursOnRate())
+				+ " on-rate Heart.<br>Equal weighting of relative XP and Heart efficiency.</div></html>");
 		}
 	}
 
@@ -486,7 +547,8 @@ final class MortimerHeartPanel extends PluginPanel
 			routingTitle.setText("SPEND 100 POINTS TO REROLL");
 			double fallbackHours = HeartCalculator.calculate(
 				new OfferState(fallback.getTask(), fallback.getSuperior(), fallback.getAmount(),
-					fallback.getDropModifier(), fallback.getKillsPerHour(), Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
+					fallback.getDropModifier(), fallback.getXpModifier(), fallback.getKillsPerHour(),
+					Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
 			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>All offers exceed the 120h target. "
 				+ html(fallback.getTask().getName()) + " is the fallback at " + hours(fallbackHours)
 				+ " with Expeditious.<br>Next offers have a " + chance + " chance to beat this set.</div></html>");
@@ -495,7 +557,8 @@ final class MortimerHeartPanel extends PluginPanel
 		{
 			double taskHours = HeartCalculator.calculate(
 				new OfferState(primary.getTask(), primary.getSuperior(), primary.getAmount(),
-					primary.getDropModifier(), primary.getKillsPerHour(), Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
+					primary.getDropModifier(), primary.getXpModifier(), primary.getKillsPerHour(),
+					Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
 			routingTitle.setText("FAST REROLL · " + primary.getTask().getName().toUpperCase(Locale.ROOT));
 			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>Use an Expeditious bracelet · "
 				+ hours(taskHours) + " to new offers.<br>Next offers have a " + chance
@@ -695,6 +758,11 @@ final class MortimerHeartPanel extends PluginPanel
 		return String.format(Locale.ENGLISH, probability < 0.0001 ? "%.4f%%" : "%.2f%%", probability * 100.0);
 	}
 
+	private static String number(double value)
+	{
+		return String.format(Locale.ENGLISH, "%,.0f", value);
+	}
+
 	private static String hours(double value)
 	{
 		if (value < 1.0)
@@ -727,7 +795,7 @@ final class MortimerHeartPanel extends PluginPanel
 			setBackground(ColorScheme.DARKER_GRAY_COLOR);
 			setBorder(new CompoundBorder(BorderFactory.createLineBorder(BORDER), new EmptyBorder(9, 9, 9, 9)));
 			setAlignmentX(LEFT_ALIGNMENT);
-			setMaximumSize(new Dimension(Integer.MAX_VALUE, 235));
+			setMaximumSize(new Dimension(Integer.MAX_VALUE, 255));
 
 			JPanel heading = new JPanel(new BorderLayout(5, 0));
 			heading.setOpaque(false);
@@ -756,7 +824,7 @@ final class MortimerHeartPanel extends PluginPanel
 			result.setBorder(new EmptyBorder(7, 7, 7, 7));
 			result.setFont(FontManager.getRunescapeSmallFont());
 			result.setAlignmentX(LEFT_ALIGNMENT);
-			result.setMaximumSize(new Dimension(Integer.MAX_VALUE, 112));
+			result.setMaximumSize(new Dimension(Integer.MAX_VALUE, 130));
 			add(result);
 			updateSummary();
 		}
@@ -765,7 +833,8 @@ final class MortimerHeartPanel extends PluginPanel
 		{
 			double kph = performance.killsPerHour(detected.getTask());
 			summary.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>" + detected.getAmount() + " assigned · "
-				+ (detected.getDropModifier() > 0 ? "+" + trim(detected.getDropModifier()) + "% Heart modifier" : "No Heart modifier")
+				+ (detected.getDropModifier() > 0 ? "+" + trim(detected.getDropModifier()) + "% Heart modifier"
+					: detected.getXpModifier() > 0 ? "+" + trim(detected.getXpModifier()) + "% XP modifier" : "No Heart/XP modifier")
 				+ "<br>" + html(superior.getMonsterName()) + " → " + html(superior.getName())
 				+ " · Heart 1/" + Math.round(superior.getHeartRate())
 				+ "<br>" + performance.paceLabel(detected.getTask()) + " · " + Math.round(kph) + " kills/hr</div></html>");
@@ -780,10 +849,10 @@ final class MortimerHeartPanel extends PluginPanel
 		{
 			HeartTask task = detected.getTask();
 			return new OfferState(task, superior, detected.getAmount(), detected.getDropModifier(),
-				performance.killsPerHour(task), bracelet);
+				detected.getXpModifier(), performance.killsPerHour(task), bracelet);
 		}
 
-		private void renderResult(HeartResult calculated, String badge)
+		private void renderResult(HeartResult calculated, double xpPerHour, String badge)
 		{
 			updateSummary();
 			boolean highlighted = badge != null && !badge.isEmpty();
@@ -793,6 +862,7 @@ final class MortimerHeartPanel extends PluginPanel
 			bestBadge.setVisible(highlighted);
 			result.setText("<html><b>Heart this task</b>  " + percent(calculated.getTaskChance())
 				+ "<br><b>Heart chance / hour</b>  " + percent(calculated.getChancePerHour())
+				+ "<br><b>Slayer XP / hour</b>  " + number(xpPerHour)
 				+ "<br><b>Task time</b>  " + hours(calculated.getTaskHours())
 				+ "<br><b>Expected superiors</b>  " + String.format(Locale.ENGLISH, "%.2f", calculated.getExpectedSuperiors())
 				+ "<br><b>On-rate Heart</b>  " + hours(calculated.getHoursOnRate()) + "</html>");

@@ -1,10 +1,12 @@
-# Mortimer Imbued Heart — RuneLite plugin
+# Mortimer Slayer — RuneLite plugin
 
-A local RuneLite sidebar calculator for comparing Mortimer Slayer offers. It contains no accounts, highscores or telemetry. The only optional network request is made directly to the OSRS Wiki when a player saves a Wiki DPS share link in a monster setting.
+A local RuneLite sidebar planner for comparing Mortimer Slayer offers by Imbued Heart chance, Slayer XP per hour, or an equal balance of both. It contains no accounts, highscores or telemetry. The only optional network request is made directly to the OSRS Wiki when a player saves a Wiki DPS share link in a monster setting.
 
 ## Features
 
 - Compare one to three Mortimer offers.
+- Choose an Imbued Heart, Slayer XP/hour, or Balanced recommendation preference from the plugin settings.
+- Detect XP Mortifiers and calculate expected Slayer XP/hour from each monster's OSRS Wiki Slayer XP value and the configured task pace.
 - Rank three strategies automatically: hunt the strongest Heart offer, rush the most efficient reroll with an Expeditious bracelet, or spend 100 Slayer points when every offer is both slow and outside the 120-hour target.
 - Calculate Heart chance for the task, Heart chance per hour, regular-kill rate, expected superiors, estimated task duration and on-rate hours to a Heart.
 - Detect the accepted Slayer task and assigned amount from RuneLite, count superior-spawn messages, then record it automatically when the in-game completion message appears.
