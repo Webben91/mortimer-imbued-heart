@@ -23,7 +23,7 @@ A local RuneLite sidebar planner for comparing Mortimer Slayer offers by Imbued 
 - Reads the local player's combat levels and automatically detects equipped Expeditious or Slaughter bracelets.
 - Shows the detected Combat Achievement tier result in the calculator panel; there is no default-on Elite setting.
 - Provides a collapsed settings section for every supported monster, with a manual DPS or OSRS Wiki DPS-link override and all single/multicombat steel/granite cannon options.
-- Uses a reliable Imbued Heart-styled RuneLite sidebar icon.
+- Uses the OSRS Slayer skill icon consistently in the RuneLite sidebar and Plugin Hub listing.
 - Includes all supported Heart Slayer tasks and superior Heart rates locally.
 
 Without an override, the plugin uses its conservative planning KPH. DPS overrides use monster Hitpoints plus a two-second per-kill handling/respawn allowance; Wiki links also apply the configured multi-target Barrage/Burst and charged Venator multipliers before cannon DPS.

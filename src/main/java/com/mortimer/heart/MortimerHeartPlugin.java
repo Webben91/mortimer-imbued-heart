@@ -1,12 +1,6 @@
 package com.mortimer.heart;
 
 import com.google.inject.Provides;
-import java.awt.BasicStroke;
-import java.awt.Color;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.geom.Path2D;
-import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -48,6 +42,7 @@ import net.runelite.client.plugins.slayer.SlayerPlugin;
 import net.runelite.client.plugins.slayer.SlayerPluginService;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.util.ImageUtil;
 import okhttp3.OkHttpClient;
 
 @Slf4j
@@ -103,7 +98,7 @@ public class MortimerHeartPlugin extends Plugin
 			panel.setGrindSummary(GrindSummary.from(grindRecords));
 			navigationButton = NavigationButton.builder()
 				.tooltip("Mortimer Slayer")
-				.icon(createHeartIcon())
+				.icon(ImageUtil.loadImageResource(MortimerHeartPlugin.class, "slayer_icon.png"))
 				.priority(6)
 				.panel(panel)
 				.build();
@@ -806,26 +801,4 @@ public class MortimerHeartPlugin extends Plugin
 		return Bracelet.NONE;
 	}
 
-	private static BufferedImage createHeartIcon()
-	{
-		BufferedImage image = new BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB);
-		Graphics2D graphics = image.createGraphics();
-		graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		Path2D heart = new Path2D.Double();
-		heart.moveTo(12, 21);
-		heart.curveTo(9, 18, 3, 14, 3, 8);
-		heart.curveTo(3, 3, 9, 2, 12, 6);
-		heart.curveTo(15, 2, 21, 3, 21, 8);
-		heart.curveTo(21, 14, 15, 18, 12, 21);
-		heart.closePath();
-		graphics.setColor(new Color(137, 28, 42));
-		graphics.fill(heart);
-		graphics.setStroke(new BasicStroke(2f));
-		graphics.setColor(new Color(226, 181, 70));
-		graphics.draw(heart);
-		graphics.setColor(new Color(244, 218, 151));
-		graphics.fillOval(7, 6, 4, 4);
-		graphics.dispose();
-		return image;
-	}
 }
