@@ -23,7 +23,17 @@ final class MortimerWidgetReader
 
 	List<MortimerDetectedOffer> read(Client client)
 	{
-		Map<Integer, List<WidgetLine>> interfaceLines = new LinkedHashMap<>();
+		List<MortimerDetectedOffer> offers = new ArrayList<>();
+		for (MortimerOfferPlacement placement : readScreen(client))
+		{
+			offers.add(placement.getOffer());
+		}
+		return offers;
+	}
+
+	List<MortimerOfferPlacement> readScreen(Client client)
+	{
+		Map<Integer, InterfaceData> interfaces = new LinkedHashMap<>();
 		Set<Widget> visited = Collections.newSetFromMap(new IdentityHashMap<>());
 		for (Widget root : client.getWidgetRoots())
 		{
@@ -32,18 +42,19 @@ final class MortimerWidgetReader
 				continue;
 			}
 			int groupId = root.getId() >>> 16;
-			List<WidgetLine> lines = interfaceLines.computeIfAbsent(groupId, ignored -> new ArrayList<>());
-			collect(root, lines, visited);
+			InterfaceData data = interfaces.computeIfAbsent(groupId, ignored -> new InterfaceData());
+			collect(root, data, visited);
 		}
 
-		List<WidgetLine> lines = interfaceLines.values().stream()
-			.filter(MortimerWidgetReader::isMortimerChoiceInterface)
+		InterfaceData selected = interfaces.values().stream()
+			.filter(data -> isMortimerChoiceInterface(data.lines))
 			.findFirst()
-			.orElse(Collections.emptyList());
-		if (lines.isEmpty())
+			.orElse(null);
+		if (selected == null || selected.lines.isEmpty())
 		{
 			return Collections.emptyList();
 		}
+		List<WidgetLine> lines = new ArrayList<>(selected.lines);
 		lines.sort(Comparator.comparingInt(WidgetLine::getY).thenComparingInt(WidgetLine::getX));
 
 		List<TaskLine> taskLines = new ArrayList<>();
@@ -56,7 +67,7 @@ final class MortimerWidgetReader
 					boolean duplicate = taskLines.stream().anyMatch(existing -> existing.task == task && Math.abs(existing.y - line.y) < 8);
 					if (!duplicate)
 					{
-						taskLines.add(new TaskLine(task, line.y));
+						taskLines.add(new TaskLine(task, line.x, line.y));
 					}
 					break;
 				}
@@ -64,7 +75,8 @@ final class MortimerWidgetReader
 		}
 		taskLines.sort(Comparator.comparingInt(value -> value.y));
 
-		List<MortimerDetectedOffer> offers = new ArrayList<>();
+		Rectangle interfaceBounds = union(selected.bounds);
+		List<MortimerOfferPlacement> offers = new ArrayList<>();
 		for (int index = 0; index < taskLines.size() && offers.size() < 3; index++)
 		{
 			TaskLine taskLine = taskLines.get(index);
@@ -106,7 +118,10 @@ final class MortimerWidgetReader
 					}
 				}
 			}
-			offers.add(new MortimerDetectedOffer(taskLine.task, amount, modifier, xpModifier, modifierText));
+			MortimerDetectedOffer offer = new MortimerDetectedOffer(
+				taskLine.task, amount, modifier, xpModifier, modifierText);
+			Rectangle rowBounds = findRowBounds(selected.bounds, interfaceBounds, taskLines, index);
+			offers.add(new MortimerOfferPlacement(offer, rowBounds));
 		}
 		return offers;
 	}
@@ -124,11 +139,16 @@ final class MortimerWidgetReader
 		return false;
 	}
 
-	private void collect(Widget widget, List<WidgetLine> lines, Set<Widget> visited)
+	private void collect(Widget widget, InterfaceData data, Set<Widget> visited)
 	{
 		if (widget == null || !visited.add(widget) || widget.isHidden())
 		{
 			return;
+		}
+		Rectangle bounds = widget.getBounds();
+		if (bounds != null && bounds.width > 0 && bounds.height > 0)
+		{
+			data.bounds.add(new Rectangle(bounds));
 		}
 		String raw = widget.getText();
 		if (raw != null && !raw.trim().isEmpty())
@@ -136,16 +156,15 @@ final class MortimerWidgetReader
 			String clean = Text.removeTags(raw.replaceAll("(?i)<br\\s*/?>", " ")).replace('\u00a0', ' ').trim();
 			if (!clean.isEmpty())
 			{
-				Rectangle bounds = widget.getBounds();
-				lines.add(new WidgetLine(clean, bounds == null ? 0 : bounds.x, bounds == null ? 0 : bounds.y));
+				data.lines.add(new WidgetLine(clean, bounds == null ? 0 : bounds.x, bounds == null ? 0 : bounds.y));
 			}
 		}
-		collectChildren(widget.getStaticChildren(), lines, visited);
-		collectChildren(widget.getDynamicChildren(), lines, visited);
-		collectChildren(widget.getNestedChildren(), lines, visited);
+		collectChildren(widget.getStaticChildren(), data, visited);
+		collectChildren(widget.getDynamicChildren(), data, visited);
+		collectChildren(widget.getNestedChildren(), data, visited);
 	}
 
-	private void collectChildren(Widget[] children, List<WidgetLine> lines, Set<Widget> visited)
+	private void collectChildren(Widget[] children, InterfaceData data, Set<Widget> visited)
 	{
 		if (children == null)
 		{
@@ -153,8 +172,67 @@ final class MortimerWidgetReader
 		}
 		for (Widget child : children)
 		{
-			collect(child, lines, visited);
+			collect(child, data, visited);
 		}
+	}
+
+	private static Rectangle findRowBounds(List<Rectangle> widgetBounds, Rectangle interfaceBounds,
+		List<TaskLine> taskLines, int index)
+	{
+		TaskLine task = taskLines.get(index);
+		Rectangle container = widgetBounds.stream()
+			.filter(bounds -> bounds.width >= Math.max(220, interfaceBounds.width * 0.6))
+			.filter(bounds -> bounds.height >= 65 && bounds.height <= 190)
+			.filter(bounds -> bounds.x <= task.x && bounds.x + bounds.width >= task.x + 20)
+			.filter(bounds -> bounds.y <= task.y && bounds.y + bounds.height >= task.y + 20)
+			.min(Comparator.comparingLong(bounds -> (long) bounds.width * bounds.height))
+			.orElse(null);
+		if (container != null)
+		{
+			return new Rectangle(container);
+		}
+
+		int horizontalInset = Math.max(5, interfaceBounds.width / 100);
+		int top = Math.max(interfaceBounds.y, task.y - 18);
+		int averageGap = 140;
+		if (taskLines.size() > 1)
+		{
+			int total = 0;
+			for (int taskIndex = 1; taskIndex < taskLines.size(); taskIndex++)
+			{
+				total += taskLines.get(taskIndex).y - taskLines.get(taskIndex - 1).y;
+			}
+			averageGap = Math.max(80, total / (taskLines.size() - 1));
+		}
+		int bottom = index + 1 < taskLines.size()
+			? taskLines.get(index + 1).y - 18 : top + averageGap;
+		int interfaceBottom = interfaceBounds.y + interfaceBounds.height;
+		if (interfaceBottom - top >= 70)
+		{
+			bottom = Math.min(bottom, interfaceBottom - 4);
+		}
+		return new Rectangle(interfaceBounds.x + horizontalInset, top,
+			Math.max(1, interfaceBounds.width - horizontalInset * 2), Math.max(65, bottom - top));
+	}
+
+	private static Rectangle union(List<Rectangle> bounds)
+	{
+		if (bounds.isEmpty())
+		{
+			return new Rectangle();
+		}
+		Rectangle union = new Rectangle(bounds.get(0));
+		for (int index = 1; index < bounds.size(); index++)
+		{
+			union.add(bounds.get(index));
+		}
+		return union;
+	}
+
+	private static final class InterfaceData
+	{
+		private final List<WidgetLine> lines = new ArrayList<>();
+		private final List<Rectangle> bounds = new ArrayList<>();
 	}
 
 	private static final class WidgetLine
@@ -178,11 +256,13 @@ final class MortimerWidgetReader
 	private static final class TaskLine
 	{
 		private final HeartTask task;
+		private final int x;
 		private final int y;
 
-		private TaskLine(HeartTask task, int y)
+		private TaskLine(HeartTask task, int x, int y)
 		{
 			this.task = task;
+			this.x = x;
 			this.y = y;
 		}
 	}

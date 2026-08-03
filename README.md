@@ -19,6 +19,7 @@ A local RuneLite sidebar planner for comparing Mortimer Slayer offers by Imbued 
 - Keep a fully local grind ledger with cumulative Imbued Heart chance, expected Hearts, tasks and assigned kills; the last automatic record can be undone.
 - Detect Elite-or-higher Combat Achievements from RuneLite's `CA_THRESHOLD_ELITE` account varbit and automatically use `1/150`; otherwise use `1/200`.
 - Directly scans the open Mortimer choice interface using RuneLite widgets whenever it opens, independent of window size or theme; no refresh button is needed.
+- Draws an animated sparkly border directly around the recommended Mortimer offer: purple for Heart, green for XP, gold for balanced, blue for a fast reroll, and red on the fastest fallback when a points skip is recommended.
 - Displays Mortimer choices as compact read-only cards with no manual offer inputs.
 - Reads the local player's combat levels and automatically detects equipped Expeditious or Slaughter bracelets.
 - Shows the detected Combat Achievement tier result in the calculator panel; there is no default-on Elite setting.

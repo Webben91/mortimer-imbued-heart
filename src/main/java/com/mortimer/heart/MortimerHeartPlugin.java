@@ -42,6 +42,7 @@ import net.runelite.client.plugins.slayer.SlayerPlugin;
 import net.runelite.client.plugins.slayer.SlayerPluginService;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 import okhttp3.OkHttpClient;
 
@@ -61,6 +62,7 @@ public class MortimerHeartPlugin extends Plugin
 	@Inject private Client client;
 	@Inject private ClientThread clientThread;
 	@Inject private ClientToolbar clientToolbar;
+	@Inject private OverlayManager overlayManager;
 	@Inject private ConfigManager configManager;
 	@Inject private MortimerHeartConfig config;
 	@Inject private OkHttpClient httpClient;
@@ -68,16 +70,21 @@ public class MortimerHeartPlugin extends Plugin
 	@Inject private SlayerPluginService slayerPluginService;
 
 	private final MortimerWidgetReader widgetReader = new MortimerWidgetReader();
+	private final MortimerRecommendationOverlay recommendationOverlay = new MortimerRecommendationOverlay();
 	private MortimerHeartPanel panel;
 	private NavigationButton navigationButton;
 	private TaskPerformanceService performance;
 	private WikiDpsResolver wikiDpsResolver;
 	private int gameTickCounter;
 	private String lastImportSignature = "";
+	private String lastRecommendationSignature = "";
+	private MortimerOverlayRecommendation lastRecommendation;
 	private List<GrindRecord> grindRecords = new ArrayList<>();
 	private List<MortimerDetectedOffer> lastDetectedOffers = new ArrayList<>();
 	private ActiveMortimerTask activeTask;
 	private boolean eliteCa;
+	private int slayerLevel = 99;
+	private int slayerPoints;
 	private String measurementTaskName = "";
 	private int measurementStartRemaining = -1;
 	private long measurementStartedAt;
@@ -90,6 +97,7 @@ public class MortimerHeartPlugin extends Plugin
 		wikiDpsResolver = new WikiDpsResolver(httpClient);
 		grindRecords = LocalGrindCodec.decode(config.localGrindData());
 		activeTask = ActiveMortimerTaskCodec.decode(config.activeTaskData());
+		overlayManager.add(recommendationOverlay);
 		SwingUtilities.invokeLater(() ->
 		{
 			panel = new MortimerHeartPanel(false, config.showMonsterVariants(), config.preferredGrind(),
@@ -112,6 +120,8 @@ public class MortimerHeartPlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
+		overlayManager.remove(recommendationOverlay);
+		recommendationOverlay.clear();
 		if (navigationButton != null)
 		{
 			clientToolbar.removeNavigation(navigationButton);
@@ -121,6 +131,8 @@ public class MortimerHeartPlugin extends Plugin
 		performance = null;
 		wikiDpsResolver = null;
 		lastImportSignature = "";
+		lastRecommendationSignature = "";
+		lastRecommendation = null;
 		lastDetectedOffers = new ArrayList<>();
 		grindRecords = new ArrayList<>();
 	}
@@ -376,11 +388,35 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			SwingUtilities.invokeLater(() -> panel.setGrindPreference(config.preferredGrind()));
 		}
+		if ("showMonsterVariants".equals(event.getKey()) || "preferredGrind".equals(event.getKey()))
+		{
+			clientThread.invokeLater(this::scanMortimerScreen);
+		}
 	}
 
 	private void scanMortimerScreen()
 	{
-		List<MortimerDetectedOffer> offers = widgetReader.read(client);
+		List<MortimerOfferPlacement> placements = widgetReader.readScreen(client);
+		if (placements.isEmpty())
+		{
+			recommendationOverlay.clear();
+			return;
+		}
+		List<MortimerDetectedOffer> offers = placements.stream()
+			.map(MortimerOfferPlacement::getOffer).collect(Collectors.toList());
+		String recommendationSignature = config.preferredGrind() + ":" + config.showMonsterVariants()
+			+ ":" + eliteCa + ":" + slayerLevel + ":" + slayerPoints + ":"
+			+ offers.stream().map(offer -> offer.getTask().getName() + ':' + offer.getAmount()
+				+ ':' + offer.getDropModifier() + ':' + offer.getXpModifier()
+				+ ':' + performance.killsPerHour(offer.getTask())).collect(Collectors.joining("|"));
+		if (!recommendationSignature.equals(lastRecommendationSignature))
+		{
+			lastRecommendationSignature = recommendationSignature;
+			lastRecommendation = MortimerOverlayRecommendationCalculator.calculate(
+				offers, config.showMonsterVariants(), config.preferredGrind(), eliteCa,
+				slayerLevel, slayerPoints, performance::killsPerHour);
+		}
+		recommendationOverlay.show(placements, lastRecommendation);
 		if (!offers.isEmpty())
 		{
 			importDetectedOffers(offers, false);
@@ -732,7 +768,14 @@ public class MortimerHeartPlugin extends Plugin
 
 	private void updateClientSnapshot()
 	{
-		if (panel == null || client.getGameState() != GameState.LOGGED_IN)
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		slayerLevel = Math.max(1, client.getRealSkillLevel(Skill.SLAYER));
+		slayerPoints = Math.max(0, client.getVarbitValue(VarbitID.SLAYER_POINTS));
+		updateEliteCaFromClient();
+		if (panel == null)
 		{
 			return;
 		}
@@ -743,16 +786,13 @@ public class MortimerHeartPlugin extends Plugin
 		int strength = client.getRealSkillLevel(Skill.STRENGTH);
 		int ranged = client.getRealSkillLevel(Skill.RANGED);
 		int magic = client.getRealSkillLevel(Skill.MAGIC);
-		int slayer = client.getRealSkillLevel(Skill.SLAYER);
-		int slayerPoints = client.getVarbitValue(VarbitID.SLAYER_POINTS);
-		updateEliteCaFromClient();
 		SwingUtilities.invokeLater(() ->
 		{
 			if (panel != null)
 			{
 				panel.setClientSnapshot(attack, strength, ranged, magic, equippedCount);
 				panel.setDetectedBracelet(bracelet);
-				panel.setRoutingContext(slayer, slayerPoints);
+				panel.setRoutingContext(slayerLevel, slayerPoints);
 			}
 		});
 	}
