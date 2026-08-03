@@ -17,18 +17,25 @@ import okhttp3.Response;
 
 final class WikiDpsResolver
 {
+	private static final String SHORTLINK_ENDPOINT = "https://tools.runescape.wiki/osrs-dps/shortlink?id=";
 	private static final Pattern ID_PATTERN = Pattern.compile("(?:[?&]id=)([A-Za-z0-9_-]{3,100})", Pattern.CASE_INSENSITIVE);
 	private final OkHttpClient httpClient;
 
 	WikiDpsResolver(OkHttpClient httpClient)
 	{
-		this.httpClient = httpClient;
+		// RuneLite must be able to exhaustively review every runtime destination.
+		// Refuse response-provided redirects so this resolver can only contact the
+		// single hardcoded OSRS Wiki endpoint below.
+		this.httpClient = httpClient.newBuilder()
+			.followRedirects(false)
+			.followSslRedirects(false)
+			.build();
 	}
 
 	Result resolve(String link, HeartTask expectedTask) throws IOException
 	{
 		String shareId = extractShareId(link);
-		String endpoint = "https://dps.osrs.wiki/shortlink?id="
+		String endpoint = SHORTLINK_ENDPOINT
 			+ URLEncoder.encode(shareId, StandardCharsets.UTF_8.name());
 		Request request = new Request.Builder().url(endpoint).header("Accept", "application/json")
 			.header("User-Agent", "Mortimer-Imbued-Heart-RuneLite/0.2").build();
