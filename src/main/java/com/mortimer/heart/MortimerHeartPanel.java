@@ -657,8 +657,8 @@ final class MortimerHeartPanel extends PluginPanel
 		ActiveMortimerTask task = currentActiveTask;
 		HeartTask heartTask = HeartData.findTask(task.getTaskName());
 		SuperiorOption selectedVariant = selectedVariant(heartTask, task.getSuperiorName());
-		double taskKph = heartTask == null ? 1.0 : performance.killsPerHour(heartTask);
-		double kph = selectedVariant == null ? taskKph : selectedVariant.effectiveKillsPerHour(taskKph);
+		double kph = heartTask == null ? 1.0 : selectedVariant == null
+			? performance.killsPerHour(heartTask) : performance.killsPerHour(heartTask, selectedVariant);
 		boolean heartEligible = task.getBaseHeartRate() > 0.0;
 		double heartPerSuperior = heartEligible ? task.getBaseHeartRate()
 			/ (1.0 + Math.max(0.0, task.getDropModifier()) / 100.0) : Double.POSITIVE_INFINITY;
@@ -687,7 +687,8 @@ final class MortimerHeartPanel extends PluginPanel
 			+ "<br>" + (heartEligible ? "Superior chance 1/" + Math.round(spawnRate) : "No superior spawns")
 			+ heartRates + "</div></html>");
 		expectedDpsValue.setText(heartTask == null ? "Unknown"
-			: String.format(Locale.ENGLISH, "%.2f", performance.expectedDps(heartTask)));
+			: String.format(Locale.ENGLISH, "%.2f", selectedVariant == null
+				? performance.expectedDps(heartTask) : performance.expectedDps(heartTask, selectedVariant)));
 		actualDpsValue.setText(currentActualDps > 0.0
 			? String.format(Locale.ENGLISH, "~%.2f", currentActualDps) : "Collecting…");
 		taskChanceValue.setText(percent(taskChance));
@@ -958,8 +959,7 @@ final class MortimerHeartPanel extends PluginPanel
 
 		private void updateSummary()
 		{
-			double taskKph = performance.killsPerHour(detected.getTask());
-			double kph = superior.effectiveKillsPerHour(taskKph);
+			double kph = performance.killsPerHour(detected.getTask(), superior);
 			String heart = superior.canDropHeart() ? "Heart 1/" + Math.round(superior.getHeartRate()) : "No superior roll";
 			double overheadMinutes = performance.overheadHours(detected.getTask()) * 60.0;
 			summary.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>" + detected.getAmount() + " assigned · "
@@ -967,7 +967,7 @@ final class MortimerHeartPanel extends PluginPanel
 					: detected.getXpModifier() > 0 ? "+" + trim(detected.getXpModifier()) + "% XP modifier" : "No Heart/XP modifier")
 				+ "<br>" + html(superior.getMonsterName()) + " → " + html(superior.getName())
 				+ " · " + heart
-				+ "<br>" + performance.paceLabel(detected.getTask()) + " · " + Math.round(kph) + " kills/hr"
+				+ "<br>" + performance.paceLabel(detected.getTask(), superior) + " · " + Math.round(kph) + " kills/hr"
 				+ (overheadMinutes >= 0.1 ? " · " + Math.round(overheadMinutes) + "m overhead" : "")
 				+ "</div></html>");
 		}
@@ -980,7 +980,7 @@ final class MortimerHeartPanel extends PluginPanel
 		private OfferState toOffer(Bracelet bracelet)
 		{
 			HeartTask task = detected.getTask();
-			double kph = superior.effectiveKillsPerHour(performance.killsPerHour(task));
+			double kph = performance.killsPerHour(task, superior);
 			return new OfferState(task, superior, detected.getAmount(), detected.getDropModifier(),
 				detected.getXpModifier(), kph, performance.overheadHours(task), bracelet);
 		}

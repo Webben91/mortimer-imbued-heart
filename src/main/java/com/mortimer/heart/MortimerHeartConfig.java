@@ -99,7 +99,7 @@ public interface MortimerHeartConfig extends Config
 	@ConfigItem(
 		keyName = "preparationSeconds",
 		name = "Preparation seconds",
-		description = "Fixed banking and gearing time added once to every assignment; learned pace already includes this time",
+		description = "Fixed banking and gearing time added once to every assignment; learned KPH keeps this time separate",
 		position = 1,
 		section = personalPaceSection
 	)

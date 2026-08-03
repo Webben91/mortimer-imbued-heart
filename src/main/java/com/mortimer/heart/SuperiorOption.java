@@ -49,7 +49,10 @@ final class SuperiorOption
 
 	boolean matchesMonster(String candidate)
 	{
-		return normalize(monsterName).equals(normalize(candidate));
+		String normalized = normalize(candidate);
+		String superiorBaseName = name.replaceAll("\\s*\\([^)]*\\)\\s*$", "");
+		return normalize(monsterName).equals(normalized) || normalize(name).equals(normalized)
+			|| normalize(superiorBaseName).equals(normalized);
 	}
 
 	String taskDisplayName(HeartTask task)

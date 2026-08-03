@@ -3,6 +3,7 @@ package com.mortimer.heart;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class SuperiorOptionTest
 {
@@ -21,5 +22,13 @@ public class SuperiorOptionTest
 		HeartTask jellies = HeartData.findTask("Jellies");
 
 		assertEquals("Warped Jellies", jellies.getSuperiors().get(1).taskDisplayName(jellies));
+	}
+
+	@Test
+	public void superiorNpcStillCountsAsTheSameTaskRoute()
+	{
+		HeartTask banshees = HeartData.findTask("Banshees");
+
+		assertTrue(banshees.getSuperiors().get(1).matchesMonster("Screaming twisted banshee"));
 	}
 }

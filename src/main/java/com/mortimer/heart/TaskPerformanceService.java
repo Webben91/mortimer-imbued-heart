@@ -9,7 +9,7 @@ final class TaskPerformanceService
 {
 	private static final double DOWNTIME_SECONDS = 2.0;
 	private static final int MINIMUM_LEARNED_KILLS = 10;
-	private static final long MINIMUM_LEARNED_MILLIS = 180_000L;
+	private static final long MINIMUM_LEARNED_MILLIS = 60_000L;
 	private static final Map<String, Integer> HITPOINTS = new HashMap<>();
 	private static final Map<String, String> KEYS = new HashMap<>();
 
@@ -55,16 +55,26 @@ final class TaskPerformanceService
 
 	double killsPerHour(HeartTask task)
 	{
+		return killsPerHour(task, task.getSuperiors().get(0));
+	}
+
+	double killsPerHour(HeartTask task, SuperiorOption superior)
+	{
 		TaskPaceProfile profile = profile(task);
 		if (profile.getManualKillsPerHour() > 0.0)
 		{
 			return profile.getManualKillsPerHour();
 		}
-		LearnedPace learned = learnedPace(task);
+		LearnedPace learned = learnedPace(task, superior);
 		if (paceMode() == PaceMode.LEARNED_WHEN_AVAILABLE && validLearnedPace(learned))
 		{
 			return learned.killsPerHour();
 		}
+		return superior.effectiveKillsPerHour(configuredKillsPerHour(task));
+	}
+
+	private double configuredKillsPerHour(HeartTask task)
+	{
 		String key = key(task);
 		String raw = value(key + "Dps").trim();
 		double baseDps = parseNumber(raw);
@@ -96,6 +106,11 @@ final class TaskPerformanceService
 		return dpsFromKph(task, killsPerHour(task));
 	}
 
+	double expectedDps(HeartTask task, SuperiorOption superior)
+	{
+		return dpsFromKph(task, killsPerHour(task, superior));
+	}
+
 	double measuredDps(HeartTask task, double kills, long elapsedMillis)
 	{
 		if (kills < 1 || elapsedMillis < 30_000L)
@@ -108,12 +123,17 @@ final class TaskPerformanceService
 
 	String paceLabel(HeartTask task)
 	{
+		return paceLabel(task, task.getSuperiors().get(0));
+	}
+
+	String paceLabel(HeartTask task, SuperiorOption superior)
+	{
 		TaskPaceProfile profile = profile(task);
 		if (profile.getManualKillsPerHour() > 0.0)
 		{
 			return "Manual KPH";
 		}
-		LearnedPace learned = learnedPace(task);
+		LearnedPace learned = learnedPace(task, superior);
 		if (paceMode() == PaceMode.LEARNED_WHEN_AVAILABLE && validLearnedPace(learned))
 		{
 			return "Learned pace · " + learned.getKills() + " kills";
@@ -148,12 +168,6 @@ final class TaskPerformanceService
 
 	double overheadHours(HeartTask task)
 	{
-		LearnedPace learned = learnedPace(task);
-		if (profile(task).getManualKillsPerHour() <= 0.0
-			&& paceMode() == PaceMode.LEARNED_WHEN_AVAILABLE && validLearnedPace(learned))
-		{
-			return 0.0;
-		}
 		int preparation = Math.max(0, integerValue("preparationSeconds"));
 		return (preparation + profile(task).getTravelSeconds()) / 3600.0;
 	}
@@ -171,12 +185,20 @@ final class TaskPerformanceService
 
 	LearnedPace learnedPace(HeartTask task)
 	{
-		return LearnedPaceCodec.decode(value("learnedPaceData")).get(task.getName());
+		return learnedPace(task, task.getSuperiors().get(0));
 	}
 
-	String recordLearnedPace(HeartTask task, int kills, long elapsedMillis)
+	LearnedPace learnedPace(HeartTask task, SuperiorOption superior)
 	{
-		if (task == null || kills < MINIMUM_LEARNED_KILLS || elapsedMillis < MINIMUM_LEARNED_MILLIS)
+		Map<String, LearnedPace> learned = LearnedPaceCodec.decode(value("learnedPaceData"));
+		LearnedPace variant = learned.get(LearnedPaceCodec.key(task.getName(), superior.getMonsterName()));
+		return variant == null ? learned.get(LearnedPaceCodec.key(task.getName(), "")) : variant;
+	}
+
+	String recordLearnedPace(HeartTask task, SuperiorOption superior, int kills, long elapsedMillis)
+	{
+		if (task == null || superior == null || kills < MINIMUM_LEARNED_KILLS
+			|| elapsedMillis < MINIMUM_LEARNED_MILLIS)
 		{
 			return value("learnedPaceData");
 		}
@@ -186,8 +208,9 @@ final class TaskPerformanceService
 			return value("learnedPaceData");
 		}
 		Map<String, LearnedPace> learned = LearnedPaceCodec.decode(value("learnedPaceData"));
-		LearnedPace previous = learned.get(task.getName());
-		learned.put(task.getName(), previous == null
+		String key = LearnedPaceCodec.key(task.getName(), superior.getMonsterName());
+		LearnedPace previous = learned.get(key);
+		learned.put(key, previous == null
 			? new LearnedPace(kills, elapsedMillis) : previous.combine(kills, elapsedMillis));
 		String encoded = LearnedPaceCodec.encode(learned);
 		configManager.setConfiguration(MortimerHeartConfig.GROUP, "learnedPaceData", encoded);

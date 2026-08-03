@@ -96,9 +96,7 @@ public class MortimerHeartPlugin extends Plugin
 	private Set<String> blockedTasks = new LinkedHashSet<>();
 	private int slayerLevel = 99;
 	private int slayerPoints;
-	private String measurementTaskName = "";
-	private int measurementStartRemaining = -1;
-	private long measurementStartedAt;
+	private final TaskActivityTracker taskActivityTracker = new TaskActivityTracker();
 	private String loadedRsProfileKey = "";
 	private PersonalPaceTask personalPaceEditorTask;
 	private boolean updatingPersonalPaceEditor;
@@ -165,11 +163,19 @@ public class MortimerHeartPlugin extends Plugin
 		}
 		ActiveMortimerTask completed = activeTask;
 		HeartTask completedTask = HeartData.findTask(completed.getTaskName());
-		if (completedTask != null && completed.getTaskName().equals(measurementTaskName))
+		if (completedTask != null)
 		{
-			String learned = performance.recordLearnedPace(completedTask,
-				(int) Math.round(detectedBracelet.adjustKills(Math.max(0, measurementStartRemaining))),
-				Math.max(0L, System.currentTimeMillis() - measurementStartedAt));
+			updateTaskMeasurement(completed.getTaskName(), 0);
+			String learned = config.learnedPaceData();
+			for (TaskActivitySample sample : taskActivityTracker.samples())
+			{
+				SuperiorOption superior = findSuperiorByMonster(completedTask, sample.getMonsterName());
+				if (superior != null)
+				{
+					learned = performance.recordLearnedPace(completedTask, superior,
+						sample.getKills(), sample.getActiveMillis());
+				}
+			}
 			if (client.getGameState() == GameState.LOGGED_IN)
 			{
 				configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "learnedPaceData", learned);
@@ -682,7 +688,7 @@ public class MortimerHeartPlugin extends Plugin
 			return null;
 		}
 		SuperiorOption superior = findSuperior(heartTask, task.getSuperiorName());
-		double kph = superior.effectiveKillsPerHour(performance.killsPerHour(heartTask));
+		double kph = performance.killsPerHour(heartTask, superior);
 		return new OfferState(heartTask, superior, task.getAssignedAmount(),
 			Math.max(0.0, task.getDropModifier()), 0.0, kph,
 			performance.overheadHours(heartTask), Bracelet.NONE);
@@ -698,6 +704,18 @@ public class MortimerHeartPlugin extends Plugin
 			}
 		}
 		return task.getSuperiors().get(0);
+	}
+
+	private static SuperiorOption findSuperiorByMonster(HeartTask task, String monsterName)
+	{
+		for (SuperiorOption superior : task.getSuperiors())
+		{
+			if (superior.matchesMonster(monsterName))
+			{
+				return superior;
+			}
+		}
+		return null;
 	}
 
 	private void refreshBraceletReminder()
@@ -808,9 +826,9 @@ public class MortimerHeartPlugin extends Plugin
 			int displayAssigned = activeTask.getAssignedAmount();
 			int displayRemaining = current != null && current.getName().equals(displayName) ? remaining : displayAssigned;
 			updateTaskMeasurement(displayName, displayRemaining);
-			double actualDps = current == null || !current.getName().equals(displayName) ? 0.0 : performance.measuredDps(current,
-				detectedBracelet.adjustKills(Math.max(0, measurementStartRemaining - displayRemaining)),
-				Math.max(0L, System.currentTimeMillis() - measurementStartedAt));
+			TaskActivitySample activity = taskActivityTracker.currentSample();
+			double actualDps = current == null || !current.getName().equals(displayName) ? 0.0
+				: performance.measuredDps(current, activity.getKills(), activity.getActiveMillis());
 			ActiveMortimerTask taskSnapshot = activeTask;
 			SwingUtilities.invokeLater(() ->
 			{
@@ -955,19 +973,38 @@ public class MortimerHeartPlugin extends Plugin
 
 	private void updateTaskMeasurement(String taskName, int remaining)
 	{
-		if (!taskName.equals(measurementTaskName) || measurementStartRemaining < 0)
+		HeartTask task = HeartData.findTask(taskName);
+		if (task == null || activeTask == null)
 		{
-			measurementTaskName = taskName;
-			measurementStartRemaining = remaining;
-			measurementStartedAt = System.currentTimeMillis();
+			return;
 		}
+		SuperiorOption selected = findSuperior(task, activeTask.getSuperiorName());
+		SuperiorOption observed = null;
+		Actor interacting = client.getLocalPlayer() == null ? null : client.getLocalPlayer().getInteracting();
+		if (interacting instanceof NPC)
+		{
+			String npcName = ((NPC) interacting).getName();
+			for (SuperiorOption candidate : task.getSuperiors())
+			{
+				if (candidate.matchesMonster(npcName))
+				{
+					observed = candidate;
+					break;
+				}
+			}
+		}
+		boolean relevantCombat = observed != null && client.getLocalPlayer() != null
+			&& client.getLocalPlayer().getAnimation() != -1;
+		boolean unrelatedCombat = interacting instanceof NPC && observed == null;
+		SuperiorOption route = observed == null ? selected : observed;
+		taskActivityTracker.update(task.getName(), Math.max(0, remaining), route.getMonsterName(),
+			relevantCombat, unrelatedCombat, System.currentTimeMillis(),
+			performance.killsPerHour(task, route), detectedBracelet);
 	}
 
 	private void resetTaskMeasurement()
 	{
-		measurementTaskName = "";
-		measurementStartRemaining = -1;
-		measurementStartedAt = 0L;
+		taskActivityTracker.reset();
 	}
 
 	private void loadRsProfileState()

@@ -100,7 +100,9 @@ public class OptimalRoutingCalculatorTest
 			offer("Banshees", 100, 20, 0));
 
 		RoutingDecision decision = OptimalRoutingCalculator.calculate(offers, true, 99, 500, 3,
-			Collections.emptySet(), false, task -> task.getDefaultKph(), (task, amount) -> 0.0,
+			Collections.emptySet(), false,
+			(task, superior) -> superior.effectiveKillsPerHour(task.getDefaultKph()),
+			(task, amount) -> 0.0,
 			task -> task.getName().equals("Banshees") ? TaskPreference.ALWAYS : TaskPreference.STANDARD);
 
 		assertEquals(RoutingDecision.Type.HUNT, decision.getType());

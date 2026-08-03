@@ -26,7 +26,9 @@ final class OptimalRoutingCalculator
 		int slayerLevel, int slayerPoints, int futureChoiceCount, ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		return calculate(currentOffers, eliteCombatAchievements, slayerLevel, slayerPoints,
-			futureChoiceCount, Collections.emptySet(), false, killsPerHour, (task, amount) -> 0.0,
+			futureChoiceCount, Collections.emptySet(), false,
+			(task, superior) -> superior.effectiveKillsPerHour(killsPerHour.applyAsDouble(task)),
+			(task, amount) -> 0.0,
 			task -> TaskPreference.STANDARD);
 	}
 
@@ -35,13 +37,15 @@ final class OptimalRoutingCalculator
 		boolean slayerCape, ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		return calculate(currentOffers, eliteCombatAchievements, slayerLevel, slayerPoints,
-			futureChoiceCount, blockedTasks, slayerCape, killsPerHour, (task, amount) -> 0.0,
+			futureChoiceCount, blockedTasks, slayerCape,
+			(task, superior) -> superior.effectiveKillsPerHour(killsPerHour.applyAsDouble(task)),
+			(task, amount) -> 0.0,
 			task -> TaskPreference.STANDARD);
 	}
 
 	static RoutingDecision calculate(List<OfferState> currentOffers, boolean eliteCombatAchievements,
 		int slayerLevel, int slayerPoints, int futureChoiceCount, Set<String> blockedTasks,
-		boolean slayerCape, ToDoubleFunction<HeartTask> killsPerHour,
+		boolean slayerCape, TaskKillsPerHourProvider killsPerHour,
 		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
 		Function<HeartTask, TaskPreference> taskPreference)
 	{
@@ -155,7 +159,7 @@ final class OptimalRoutingCalculator
 	}
 
 	private static List<FutureSet> sampleFutureSets(boolean eliteCombatAchievements, int slayerLevel,
-		int choiceCount, Set<String> blockedTasks, ToDoubleFunction<HeartTask> killsPerHour,
+		int choiceCount, Set<String> blockedTasks, TaskKillsPerHourProvider killsPerHour,
 		ToDoubleBiFunction<HeartTask, Integer> overheadHours)
 	{
 		List<MortimerRoutingData.Profile> eligible = MortimerRoutingData.eligibleProfiles(slayerLevel, blockedTasks);
@@ -185,10 +189,9 @@ final class OptimalRoutingCalculator
 				{
 					modifier = between(random, profile.getSuperiorMin(), profile.getSuperiorMax(), 5);
 				}
-				double taskKph = Math.max(1.0, killsPerHour.applyAsDouble(task));
 				for (SuperiorOption superior : task.getSuperiors())
 				{
-					double kph = superior.effectiveKillsPerHour(taskKph);
+					double kph = Math.max(1.0, killsPerHour.applyAsDouble(task, superior));
 					OfferState base = new OfferState(task, superior, amount, modifier, 0.0, kph,
 						overheadHours.applyAsDouble(task, amount), Bracelet.NONE);
 					bestOnRate = Math.min(bestOnRate,

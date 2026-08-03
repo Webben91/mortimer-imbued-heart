@@ -19,7 +19,7 @@ final class LearnedPaceCodec
 		for (String record : encoded.split(";"))
 		{
 			String[] fields = record.split(",", -1);
-			if (fields.length != 3)
+			if (fields.length != 3 && fields.length != 4)
 			{
 				continue;
 			}
@@ -28,7 +28,11 @@ final class LearnedPaceCodec
 				HeartTask task = HeartData.findTask(fields[0]);
 				if (task != null)
 				{
-					paces.put(task.getName(), new LearnedPace(Integer.parseInt(fields[1]), Long.parseLong(fields[2])));
+					String monsterName = fields.length == 4 ? fields[1] : "";
+					int killsIndex = fields.length == 4 ? 2 : 1;
+					int timeIndex = fields.length == 4 ? 3 : 2;
+					paces.put(key(task.getName(), monsterName),
+						new LearnedPace(Integer.parseInt(fields[killsIndex]), Long.parseLong(fields[timeIndex])));
 				}
 			}
 			catch (RuntimeException ignored)
@@ -49,13 +53,30 @@ final class LearnedPaceCodec
 			{
 				continue;
 			}
+			String[] keyParts = splitKey(entry.getKey());
+			if (HeartData.findTask(keyParts[0]) == null)
+			{
+				continue;
+			}
 			if (encoded.length() > 0)
 			{
 				encoded.append(';');
 			}
-			encoded.append(entry.getKey()).append(',').append(pace.getKills()).append(',')
-				.append(pace.getElapsedMillis());
+			encoded.append(keyParts[0]).append(',').append(keyParts[1]).append(',')
+				.append(pace.getKills()).append(',').append(pace.getElapsedMillis());
 		}
 		return encoded.toString();
+	}
+
+	static String key(String taskName, String monsterName)
+	{
+		return taskName + "|" + (monsterName == null ? "" : monsterName);
+	}
+
+	private static String[] splitKey(String key)
+	{
+		int separator = key.indexOf('|');
+		return separator < 0 ? new String[]{key, ""}
+			: new String[]{key.substring(0, separator), key.substring(separator + 1)};
 	}
 }

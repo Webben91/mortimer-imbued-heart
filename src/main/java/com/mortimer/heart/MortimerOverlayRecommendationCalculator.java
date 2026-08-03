@@ -20,7 +20,8 @@ final class MortimerOverlayRecommendationCalculator
 		int slayerLevel, int slayerPoints, ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		return calculate(detectedOffers, showMonsterVariants, preference, eliteCombatAchievements,
-			slayerLevel, slayerPoints, Collections.emptySet(), false, killsPerHour,
+			slayerLevel, slayerPoints, Collections.emptySet(), false,
+			(task, superior) -> superior.effectiveKillsPerHour(killsPerHour.applyAsDouble(task)),
 			(task, amount) -> 0.0, task -> TaskPreference.STANDARD);
 	}
 
@@ -30,14 +31,15 @@ final class MortimerOverlayRecommendationCalculator
 		ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		return calculate(detectedOffers, showMonsterVariants, preference, eliteCombatAchievements,
-			slayerLevel, slayerPoints, blockedTasks, slayerCape, killsPerHour,
+			slayerLevel, slayerPoints, blockedTasks, slayerCape,
+			(task, superior) -> superior.effectiveKillsPerHour(killsPerHour.applyAsDouble(task)),
 			(task, amount) -> 0.0, task -> TaskPreference.STANDARD);
 	}
 
 	static MortimerOverlayRecommendation calculate(List<MortimerDetectedOffer> detectedOffers,
 		boolean showMonsterVariants, GrindPreference preference, boolean eliteCombatAchievements,
 		int slayerLevel, int slayerPoints, Set<String> blockedTasks, boolean slayerCape,
-		ToDoubleFunction<HeartTask> killsPerHour,
+		TaskKillsPerHourProvider killsPerHour,
 		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
 		Function<HeartTask, TaskPreference> taskPreference)
 	{
@@ -56,8 +58,8 @@ final class MortimerOverlayRecommendationCalculator
 				: detected.getTask().getSuperiors().subList(0, 1);
 			for (SuperiorOption superior : variants)
 			{
-				double effectiveKph = superior.effectiveKillsPerHour(
-					Math.max(1.0, killsPerHour.applyAsDouble(detected.getTask())));
+				double effectiveKph = Math.max(1.0,
+					killsPerHour.applyAsDouble(detected.getTask(), superior));
 				offers.add(new OfferState(detected.getTask(), superior, detected.getAmount(),
 					detected.getDropModifier(), detected.getXpModifier(),
 					effectiveKph, overheadHours.applyAsDouble(detected.getTask(), detected.getAmount()),

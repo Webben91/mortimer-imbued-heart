@@ -17,7 +17,8 @@ A local RuneLite sidebar planner for comparing Mortimer Slayer offers by Imbued 
 - Optionally expand assignments with multiple valid monster variants into separate comparison cards, offer a live-task variant selector, and automatically switch the selected variant when the player attacks a recognised monster.
 - Label expanded variants by their actual route, such as Banshees and Twisted banshees, instead of repeating the assignment name.
 - Show expected DPS plus a session estimate derived from live task progress after enough data has been collected.
-- Optionally learn end-to-end task pace from completed assignments and sync those samples with the character's RuneScape profile.
+- Optionally learn task KPH from completed assignments and sync it with the character's RuneScape profile.
+- Start learned timing after the first task kill, pause during long idle gaps or unrelated combat, and keep separate figures for monster variants such as Banshees and Twisted banshees.
 - Configure a direct final KPH override, travel time and personal preference for any supported task from one collapsed Personal pace editor.
 - Apply banking/gearing and travel overhead to task time, Heart chance per hour, Slayer XP per hour and long-term routing calculations.
 - Explain whether a recommendation is a near tie, competitive or strong, and identify when a personal preference overrides the numerical leader.
