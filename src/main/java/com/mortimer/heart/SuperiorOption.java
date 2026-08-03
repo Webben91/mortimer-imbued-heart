@@ -5,12 +5,19 @@ final class SuperiorOption
 	private final String monsterName;
 	private final String name;
 	private final double heartRate;
+	private final double strategyKillsPerHour;
 
 	SuperiorOption(String monsterName, String name, double heartRate)
+	{
+		this(monsterName, name, heartRate, 0.0);
+	}
+
+	SuperiorOption(String monsterName, String name, double heartRate, double strategyKillsPerHour)
 	{
 		this.monsterName = monsterName;
 		this.name = name;
 		this.heartRate = heartRate;
+		this.strategyKillsPerHour = strategyKillsPerHour;
 	}
 
 	String getMonsterName()
@@ -26,6 +33,16 @@ final class SuperiorOption
 	double getHeartRate()
 	{
 		return heartRate;
+	}
+
+	double effectiveKillsPerHour(double taskKillsPerHour)
+	{
+		return strategyKillsPerHour > 0.0 ? strategyKillsPerHour : taskKillsPerHour;
+	}
+
+	boolean canDropHeart()
+	{
+		return heartRate > 0.0 && Double.isFinite(heartRate);
 	}
 
 	boolean matchesMonster(String candidate)

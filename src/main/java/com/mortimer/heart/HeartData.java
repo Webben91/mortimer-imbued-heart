@@ -16,6 +16,11 @@ final class HeartData
 		return new SuperiorOption(monsterName, superiorName, rate);
 	}
 
+	private static SuperiorOption strategy(String monsterName, String strategyName, double killsPerHour)
+	{
+		return new SuperiorOption(monsterName, strategyName, 0.0, killsPerHour);
+	}
+
 	static final List<HeartTask> TASKS = Collections.unmodifiableList(Arrays.asList(
 		new HeartTask("Aberrant spectres", 80, 120, 300, superior("Aberrant spectre", "Abhorrent spectre", 760), superior("Deviant spectre", "Repugnant spectre", 760)),
 		new HeartTask("Abyssal demons", 120, 180, 350, superior("Abyssal demon", "Greater abyssal demon", 352)),
@@ -45,7 +50,8 @@ final class HeartData
 		new HeartTask("Turoth", 80, 120, 350, superior("Turoth", "Spiked Turoth", 832)),
 		new HeartTask("Venators", 120, 180, 110, superior("Venator", "Blood-starved venator", 536)),
 		new HeartTask("Warped creatures", 80, 120, 350, superior("Warped Terrorbird", "Mutated Terrorbird", 816), superior("Warped Tortoise", "Mutated Tortoise", 816)),
-		new HeartTask("Wyrms", 80, 120, 180, superior("Wyrm", "Shadow Wyrm", 728), superior("Magma Wyrm", "Magma strykewyrm", 728))
+		new HeartTask("Wyrms", 80, 120, 180, superior("Wyrm", "Shadow Wyrm", 728), superior("Magma Wyrm", "Magma strykewyrm", 728),
+			strategy("Wyrmling", "Fast reroll — no superior", 920))
 	));
 
 	static HeartTask findTask(String text)

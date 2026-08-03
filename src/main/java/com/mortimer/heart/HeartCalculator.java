@@ -12,7 +12,8 @@ final class HeartCalculator
 	{
 		double spawnRate = eliteCombatAchievements ? 150.0 : 200.0;
 		double modifierMultiplier = 1.0 + Math.max(0.0, offer.getDropModifier()) / 100.0;
-		double heartPerSuperior = offer.getSuperior().getHeartRate() / modifierMultiplier;
+		double heartPerSuperior = offer.getSuperior().canDropHeart()
+			? offer.getSuperior().getHeartRate() / modifierMultiplier : Double.POSITIVE_INFINITY;
 		double heartPerKill = spawnRate * heartPerSuperior;
 		double actualKills = Math.max(1.0, offer.getBracelet().adjustKills(offer.getAmount()));
 		double killsPerHour = Math.max(1.0, offer.getKillsPerHour());
@@ -20,7 +21,8 @@ final class HeartCalculator
 		double chancePerHour = atLeastOneChance(killsPerHour, heartPerKill);
 		double expectedSuperiors = actualKills / spawnRate;
 		double taskHours = actualKills / killsPerHour;
-		double hoursOnRate = heartPerKill / killsPerHour;
+		double hoursOnRate = Double.isFinite(heartPerKill)
+			? heartPerKill / killsPerHour : Double.POSITIVE_INFINITY;
 		return new HeartResult(offer, actualKills, heartPerSuperior, heartPerKill, taskChance,
 			chancePerHour, expectedSuperiors, taskHours, hoursOnRate);
 	}

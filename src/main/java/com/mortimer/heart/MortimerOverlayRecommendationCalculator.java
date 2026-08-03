@@ -2,6 +2,9 @@ package com.mortimer.heart;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Collections;
+import java.util.Locale;
+import java.util.Set;
 import java.util.function.ToDoubleFunction;
 
 final class MortimerOverlayRecommendationCalculator
@@ -13,6 +16,15 @@ final class MortimerOverlayRecommendationCalculator
 	static MortimerOverlayRecommendation calculate(List<MortimerDetectedOffer> detectedOffers,
 		boolean showMonsterVariants, GrindPreference preference, boolean eliteCombatAchievements,
 		int slayerLevel, int slayerPoints, ToDoubleFunction<HeartTask> killsPerHour)
+	{
+		return calculate(detectedOffers, showMonsterVariants, preference, eliteCombatAchievements,
+			slayerLevel, slayerPoints, Collections.emptySet(), false, killsPerHour);
+	}
+
+	static MortimerOverlayRecommendation calculate(List<MortimerDetectedOffer> detectedOffers,
+		boolean showMonsterVariants, GrindPreference preference, boolean eliteCombatAchievements,
+		int slayerLevel, int slayerPoints, Set<String> blockedTasks, boolean slayerCape,
+		ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		if (detectedOffers.isEmpty())
 		{
@@ -29,9 +41,11 @@ final class MortimerOverlayRecommendationCalculator
 				: detected.getTask().getSuperiors().subList(0, 1);
 			for (SuperiorOption superior : variants)
 			{
+				double effectiveKph = superior.effectiveKillsPerHour(
+					Math.max(1.0, killsPerHour.applyAsDouble(detected.getTask())));
 				offers.add(new OfferState(detected.getTask(), superior, detected.getAmount(),
 					detected.getDropModifier(), detected.getXpModifier(),
-					Math.max(1.0, killsPerHour.applyAsDouble(detected.getTask())), Bracelet.NONE));
+					effectiveKph, Bracelet.NONE));
 				sourceOfferIndexes.add(offerIndex);
 			}
 		}
@@ -52,7 +66,7 @@ final class MortimerOverlayRecommendationCalculator
 		}
 
 		RoutingDecision decision = OptimalRoutingCalculator.calculate(offers, eliteCombatAchievements,
-			slayerLevel, slayerPoints, detectedOffers.size(), killsPerHour);
+			slayerLevel, slayerPoints, detectedOffers.size(), blockedTasks, slayerCape, killsPerHour);
 		if (decision == null)
 		{
 			return null;
@@ -65,10 +79,19 @@ final class MortimerOverlayRecommendationCalculator
 		}
 		if (decision.getType() == RoutingDecision.Type.FAST_REROLL)
 		{
+			OfferState primary = offers.get(decision.getPrimaryIndex());
+			String label = primary.getSuperior().canDropHeart()
+				? "FAST REROLL · EXPEDITIOUS" : primary.getSuperior().getMonsterName().toUpperCase(Locale.ROOT) + " · EXPEDITIOUS";
 			return new MortimerOverlayRecommendation(sourceOfferIndexes.get(decision.getPrimaryIndex()),
-				MortimerOverlayRecommendation.Style.FAST_REROLL, "RECOMMENDED · FAST REROLL");
+				MortimerOverlayRecommendation.Style.FAST_REROLL, label);
 		}
+		OfferState primary = offers.get(decision.getPrimaryIndex());
+		String bracelet = decision.getBracelet() == Bracelet.NONE
+			? "" : " · " + decision.getBracelet().toString().toUpperCase(Locale.ROOT);
+		String heartLabel = primary.getTask().getSuperiors().size() > 1
+			? primary.getSuperior().getMonsterName().toUpperCase(Locale.ROOT) + bracelet
+			: "BEST HEART" + bracelet;
 		return new MortimerOverlayRecommendation(sourceOfferIndexes.get(decision.getPrimaryIndex()),
-			MortimerOverlayRecommendation.Style.HEART, "RECOMMENDED · BEST HEART");
+			MortimerOverlayRecommendation.Style.HEART, heartLabel);
 	}
 }

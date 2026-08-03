@@ -4,10 +4,12 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
-import java.awt.Rectangle;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -17,8 +19,6 @@ import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.Scrollable;
 import javax.swing.JSpinner;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingConstants;
@@ -41,6 +41,7 @@ final class MortimerHeartPanel extends PluginPanel
 	private static final int ACTIVE_TEXT_WIDTH = 180;
 
 	private final JPanel flow = new JPanel();
+	private final JPanel content = new JPanel();
 	private final JPanel offersContainer = new JPanel();
 	private final JPanel offersHeader = new JPanel(new BorderLayout());
 	private final JPanel routingCard;
@@ -87,6 +88,8 @@ final class MortimerHeartPanel extends PluginPanel
 	private double currentActualDps;
 	private int slayerLevel = 99;
 	private int slayerPoints;
+	private boolean slayerCape;
+	private Set<String> blockedTasks = Collections.emptySet();
 	private GrindPreference grindPreference;
 
 	MortimerHeartPanel(boolean eliteCombatAchievements, boolean showMonsterVariants, GrindPreference grindPreference,
@@ -104,7 +107,6 @@ final class MortimerHeartPanel extends PluginPanel
 		setLayout(new BorderLayout());
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-		JPanel content = new WidthTrackingPanel();
 		content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 		content.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		content.setBorder(new EmptyBorder(8, 4, 8, 4));
@@ -255,11 +257,11 @@ final class MortimerHeartPanel extends PluginPanel
 		content.add(flow);
 		rebuildFlow();
 
-		JScrollPane scroll = new JScrollPane(content);
-		scroll.setBorder(null);
-		scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-		scroll.getVerticalScrollBar().setUnitIncrement(16);
-		add(scroll, BorderLayout.CENTER);
+		// PluginPanel already wraps itself in RuneLite's sidebar scroll pane. Keeping a
+		// second scroll pane here prevented mouse-wheel events from reaching the native
+		// sidebar scrollbar, even though dragging the nested scrollbar still worked.
+		add(content, BorderLayout.CENTER);
+		getScrollPane().getVerticalScrollBar().setUnitIncrement(16);
 		updateRulesSnapshot();
 	}
 
@@ -286,16 +288,23 @@ final class MortimerHeartPanel extends PluginPanel
 		recalculate();
 	}
 
-	void setRoutingContext(int newSlayerLevel, int newSlayerPoints)
+	void setRoutingContext(int newSlayerLevel, int newSlayerPoints, boolean newSlayerCape,
+		Set<String> newBlockedTasks)
 	{
 		int level = Math.max(1, newSlayerLevel);
 		int points = Math.max(0, newSlayerPoints);
-		if (slayerLevel == level && slayerPoints == points)
+		Set<String> blocks = newBlockedTasks == null
+			? Collections.emptySet() : new LinkedHashSet<>(newBlockedTasks);
+		if (slayerLevel == level && slayerPoints == points && slayerCape == newSlayerCape
+			&& blockedTasks.equals(blocks))
 		{
 			return;
 		}
 		slayerLevel = level;
 		slayerPoints = points;
+		slayerCape = newSlayerCape;
+		blockedTasks = blocks;
+		updateRulesSnapshot();
 		recalculate();
 	}
 
@@ -313,9 +322,14 @@ final class MortimerHeartPanel extends PluginPanel
 
 	void setActiveTask(ActiveMortimerTask task, int remaining)
 	{
+		int nextRemaining = Math.max(0, remaining);
+		if (currentActiveTask == task && currentRemaining == nextRemaining)
+		{
+			return;
+		}
 		boolean wasActive = currentActiveTask != null;
 		currentActiveTask = task;
-		currentRemaining = Math.max(0, remaining);
+		currentRemaining = nextRemaining;
 		if (task == null && wasActive)
 		{
 			offerCards.clear();
@@ -441,9 +455,14 @@ final class MortimerHeartPanel extends PluginPanel
 	private void updateRulesSnapshot()
 	{
 		String bracelet = detectedBracelet == Bracelet.NONE ? "No Slayer bracelet" : detectedBracelet.toString();
+		String blocks = blockedTasks.isEmpty() ? "No Mortimer blocks detected"
+			: "Blocked: " + String.join(", ", blockedTasks);
 		rulesSnapshot.setText("<html><div style='text-align:center'>"
 			+ (eliteCa ? "Elite CA · Superior 1/150" : "Below Elite CA · Superior 1/200")
-			+ "<br>" + html(bracelet) + "</div></html>");
+			+ " · " + (slayerCape ? "Slayer cape active" : "No Slayer cape")
+			+ "<br>" + html(bracelet)
+			+ "<br>" + html(blocks)
+			+ "</div></html>");
 	}
 
 	private void recalculate()
@@ -461,7 +480,7 @@ final class MortimerHeartPanel extends PluginPanel
 		}
 		RoutingDecision decision = grindPreference == GrindPreference.IMBUED_HEART
 			? OptimalRoutingCalculator.calculate(routingOffers, eliteCa, slayerLevel,
-				slayerPoints, lastDetectedOffers.size(), performance::killsPerHour)
+				slayerPoints, lastDetectedOffers.size(), blockedTasks, slayerCape, performance::killsPerHour)
 			: null;
 		int preferenceIndex = decision == null
 			? PreferenceRecommendationCalculator.bestIndex(routingOffers, eliteCa, grindPreference) : -1;
@@ -490,16 +509,39 @@ final class MortimerHeartPanel extends PluginPanel
 				else if (index == decision.getPrimaryIndex())
 				{
 					badge = decision.getType() == RoutingDecision.Type.FAST_REROLL
-						? "FAST REROLL · EXPEDITIOUS" : "RECOMMENDED";
+						? "FAST REROLL · EXPEDITIOUS"
+						: "RECOMMENDED · " + decision.getBracelet().toString().toUpperCase(Locale.ROOT);
 				}
 				else if (decision.getType() != RoutingDecision.Type.HUNT
 					&& index == decision.getBestHeartIndex())
 				{
 					badge = "BEST HEART OPTION";
 				}
+				else if (results.get(index).getHoursOnRate() <= OptimalRoutingCalculator.TARGET_HEART_HOURS * 1.25)
+				{
+					badge = "VIABLE HEART · SLAUGHTER";
+				}
 			}
 			offerCards.get(index).renderResult(results.get(index), xpRates.get(index), badge);
 		}
+		refreshLayout();
+	}
+
+	private void refreshLayout()
+	{
+		offersContainer.invalidate();
+		flow.invalidate();
+		content.invalidate();
+		content.revalidate();
+		revalidate();
+		repaint();
+		SwingUtilities.invokeLater(() ->
+		{
+			offersContainer.revalidate();
+			flow.revalidate();
+			content.revalidate();
+			content.repaint();
+		});
 	}
 
 	private void renderPreferenceDecision(int index, List<HeartResult> results,
@@ -567,8 +609,10 @@ final class MortimerHeartPanel extends PluginPanel
 		else
 		{
 			routingTitle.setText("HUNT · " + primary.getTask().getName().toUpperCase(Locale.ROOT));
-			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>Best current Heart route. "
+			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>Use a "
+				+ html(decision.getBracelet().toString()) + " bracelet. Best current Heart route. "
 				+ "Modelled route to Heart: " + hours(decision.getExpectedHours())
+				+ (slayerCape ? ". Slayer cape repeats are included" : "")
 				+ ".<br>Fresh-offer baseline: " + hours(decision.getFreshOfferHours()) + ".</div></html>");
 		}
 	}
@@ -582,9 +626,11 @@ final class MortimerHeartPanel extends PluginPanel
 		ActiveMortimerTask task = currentActiveTask;
 		HeartTask heartTask = HeartData.findTask(task.getTaskName());
 		SuperiorOption selectedVariant = selectedVariant(heartTask, task.getSuperiorName());
-		double kph = heartTask == null ? 1.0 : performance.killsPerHour(heartTask);
-		double heartPerSuperior = task.getBaseHeartRate()
-			/ (1.0 + Math.max(0.0, task.getDropModifier()) / 100.0);
+		double taskKph = heartTask == null ? 1.0 : performance.killsPerHour(heartTask);
+		double kph = selectedVariant == null ? taskKph : selectedVariant.effectiveKillsPerHour(taskKph);
+		boolean heartEligible = task.getBaseHeartRate() > 0.0;
+		double heartPerSuperior = heartEligible ? task.getBaseHeartRate()
+			/ (1.0 + Math.max(0.0, task.getDropModifier()) / 100.0) : Double.POSITIVE_INFINITY;
 		double spawnRate = eliteCa ? 150.0 : 200.0;
 		double fullKills = detectedBracelet.adjustKills(task.getAssignedAmount());
 		double remainingKills = detectedBracelet.adjustKills(currentRemaining);
@@ -600,19 +646,23 @@ final class MortimerHeartPanel extends PluginPanel
 		activeTaskName.setText("<html>" + html(task.getTaskName().toUpperCase(Locale.ROOT)) + " · <b>"
 			+ currentRemaining + "/" + task.getAssignedAmount() + "</b></html>");
 		updateVariantSelector(heartTask, selectedVariant);
+		String heartRates = heartEligible
+			? "<br><br><b>" + html(task.getSuperiorName()) + " base</b>  1/" + Math.round(task.getBaseHeartRate())
+				+ "<br><b>" + html(task.getSuperiorName()) + " increased</b>  1/" + Math.round(heartPerSuperior)
+			: "<br><br><b>" + html(task.getSuperiorName()) + "</b> · no superior or Heart chance";
 		activeTaskSummary.setText("<html><div style='width:" + ACTIVE_TEXT_WIDTH + "px'>"
 			+ (task.getDropModifier() < 0 ? "Mortimer modifier unavailable"
 				: task.getDropModifier() > 0 ? "+" + trim(task.getDropModifier()) + "% Mortimer heart modifier" : "No Mortimer heart modifier")
-			+ "<br>Superior chance 1/" + Math.round(spawnRate)
-			+ "<br><br><b>" + html(task.getSuperiorName()) + " base</b>  1/" + Math.round(task.getBaseHeartRate())
-			+ "<br><b>" + html(task.getSuperiorName()) + " increased</b>  1/" + Math.round(heartPerSuperior) + "</div></html>");
+			+ "<br>" + (heartEligible ? "Superior chance 1/" + Math.round(spawnRate) : "No superior spawns")
+			+ heartRates + "</div></html>");
 		expectedDpsValue.setText(heartTask == null ? "Unknown"
 			: String.format(Locale.ENGLISH, "%.2f", performance.expectedDps(heartTask)));
 		actualDpsValue.setText(currentActualDps > 0.0
 			? String.format(Locale.ENGLISH, "~%.2f", currentActualDps) : "Collecting…");
 		taskChanceValue.setText(percent(taskChance));
 		superiorCountValue.setText(Integer.toString(task.getSuperiorRolls()));
-		expectedSuperiorsValue.setText(String.format(Locale.ENGLISH, "%.2f", remainingKills / spawnRate));
+		expectedSuperiorsValue.setText(heartEligible
+			? String.format(Locale.ENGLISH, "%.2f", remainingKills / spawnRate) : "0.00");
 		overallChanceValue.setText(percent(overallChance));
 		timeRemainingValue.setText(hours(remainingKills / Math.max(1.0, kph)));
 	}
@@ -765,6 +815,10 @@ final class MortimerHeartPanel extends PluginPanel
 
 	private static String hours(double value)
 	{
+		if (!Double.isFinite(value))
+		{
+			return "No Heart chance";
+		}
 		if (value < 1.0)
 		{
 			return Math.max(1, Math.round(value * 60.0)) + " min";
@@ -795,7 +849,6 @@ final class MortimerHeartPanel extends PluginPanel
 			setBackground(ColorScheme.DARKER_GRAY_COLOR);
 			setBorder(new CompoundBorder(BorderFactory.createLineBorder(BORDER), new EmptyBorder(9, 9, 9, 9)));
 			setAlignmentX(LEFT_ALIGNMENT);
-			setMaximumSize(new Dimension(Integer.MAX_VALUE, 255));
 
 			JPanel heading = new JPanel(new BorderLayout(5, 0));
 			heading.setOpaque(false);
@@ -824,19 +877,28 @@ final class MortimerHeartPanel extends PluginPanel
 			result.setBorder(new EmptyBorder(7, 7, 7, 7));
 			result.setFont(FontManager.getRunescapeSmallFont());
 			result.setAlignmentX(LEFT_ALIGNMENT);
-			result.setMaximumSize(new Dimension(Integer.MAX_VALUE, 130));
+			result.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
 			add(result);
 			updateSummary();
 		}
 
+		@Override
+		public Dimension getMaximumSize()
+		{
+			Dimension preferred = getPreferredSize();
+			return new Dimension(Integer.MAX_VALUE, preferred.height);
+		}
+
 		private void updateSummary()
 		{
-			double kph = performance.killsPerHour(detected.getTask());
+			double taskKph = performance.killsPerHour(detected.getTask());
+			double kph = superior.effectiveKillsPerHour(taskKph);
+			String heart = superior.canDropHeart() ? "Heart 1/" + Math.round(superior.getHeartRate()) : "No superior roll";
 			summary.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>" + detected.getAmount() + " assigned · "
 				+ (detected.getDropModifier() > 0 ? "+" + trim(detected.getDropModifier()) + "% Heart modifier"
 					: detected.getXpModifier() > 0 ? "+" + trim(detected.getXpModifier()) + "% XP modifier" : "No Heart/XP modifier")
 				+ "<br>" + html(superior.getMonsterName()) + " → " + html(superior.getName())
-				+ " · Heart 1/" + Math.round(superior.getHeartRate())
+				+ " · " + heart
 				+ "<br>" + performance.paceLabel(detected.getTask()) + " · " + Math.round(kph) + " kills/hr</div></html>");
 		}
 
@@ -848,13 +910,15 @@ final class MortimerHeartPanel extends PluginPanel
 		private OfferState toOffer(Bracelet bracelet)
 		{
 			HeartTask task = detected.getTask();
+			double kph = superior.effectiveKillsPerHour(performance.killsPerHour(task));
 			return new OfferState(task, superior, detected.getAmount(), detected.getDropModifier(),
-				detected.getXpModifier(), performance.killsPerHour(task), bracelet);
+				detected.getXpModifier(), kph, bracelet);
 		}
 
 		private void renderResult(HeartResult calculated, double xpPerHour, String badge)
 		{
 			updateSummary();
+			Bracelet suggestedBracelet = BraceletAdvisor.recommend(toOffer(Bracelet.NONE), eliteCa);
 			boolean highlighted = badge != null && !badge.isEmpty();
 			setBorder(new CompoundBorder(BorderFactory.createLineBorder(highlighted ? GOLD : BORDER, highlighted ? 2 : 1),
 				new EmptyBorder(highlighted ? 8 : 9, highlighted ? 8 : 9, highlighted ? 8 : 9, highlighted ? 8 : 9)));
@@ -865,6 +929,7 @@ final class MortimerHeartPanel extends PluginPanel
 				+ "<br><b>Slayer XP / hour</b>  " + number(xpPerHour)
 				+ "<br><b>Task time</b>  " + hours(calculated.getTaskHours())
 				+ "<br><b>Expected superiors</b>  " + String.format(Locale.ENGLISH, "%.2f", calculated.getExpectedSuperiors())
+				+ "<br><b>Recommended bracelet</b>  " + html(suggestedBracelet.toString())
 				+ "<br><b>On-rate Heart</b>  " + hours(calculated.getHoursOnRate()) + "</html>");
 		}
 	}
@@ -874,36 +939,4 @@ final class MortimerHeartPanel extends PluginPanel
 		return value == Math.rint(value) ? Long.toString(Math.round(value)) : String.format(Locale.ENGLISH, "%.1f", value);
 	}
 
-	private static final class WidthTrackingPanel extends JPanel implements Scrollable
-	{
-		@Override
-		public Dimension getPreferredScrollableViewportSize()
-		{
-			return getPreferredSize();
-		}
-
-		@Override
-		public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
-		{
-			return 16;
-		}
-
-		@Override
-		public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
-		{
-			return Math.max(16, visibleRect.height - 16);
-		}
-
-		@Override
-		public boolean getScrollableTracksViewportWidth()
-		{
-			return true;
-		}
-
-		@Override
-		public boolean getScrollableTracksViewportHeight()
-		{
-			return false;
-		}
-	}
 }

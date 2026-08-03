@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 final class MortimerRoutingData
 {
@@ -51,11 +52,17 @@ final class MortimerRoutingData
 
 	static List<Profile> eligibleProfiles(int slayerLevel)
 	{
+		return eligibleProfiles(slayerLevel, Collections.emptySet());
+	}
+
+	static List<Profile> eligibleProfiles(int slayerLevel, Set<String> blockedTasks)
+	{
 		int effectiveLevel = slayerLevel <= 0 ? 99 : slayerLevel;
 		List<Profile> eligible = new ArrayList<>();
 		for (Profile profile : PROFILES.values())
 		{
-			if (profile.requiredSlayer <= effectiveLevel && profile.task != null)
+			if (profile.requiredSlayer <= effectiveLevel && profile.task != null
+				&& !blockedTasks.contains(profile.task.getName()))
 			{
 				eligible.add(profile);
 			}

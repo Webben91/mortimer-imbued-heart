@@ -2,8 +2,10 @@ package com.mortimer.heart;
 
 import com.google.inject.Provides;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -29,6 +31,7 @@ import net.runelite.api.events.InteractingChanged;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.events.WidgetClosed;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -70,7 +73,10 @@ public class MortimerHeartPlugin extends Plugin
 	@Inject private SlayerPluginService slayerPluginService;
 
 	private final MortimerWidgetReader widgetReader = new MortimerWidgetReader();
+	private final MortimerBlockListReader blockListReader = new MortimerBlockListReader();
+	private final MortimerRepeatChoiceReader repeatChoiceReader = new MortimerRepeatChoiceReader();
 	private final MortimerRecommendationOverlay recommendationOverlay = new MortimerRecommendationOverlay();
+	private final BraceletReminderOverlay braceletReminderOverlay = new BraceletReminderOverlay();
 	private MortimerHeartPanel panel;
 	private NavigationButton navigationButton;
 	private TaskPerformanceService performance;
@@ -82,7 +88,11 @@ public class MortimerHeartPlugin extends Plugin
 	private List<GrindRecord> grindRecords = new ArrayList<>();
 	private List<MortimerDetectedOffer> lastDetectedOffers = new ArrayList<>();
 	private ActiveMortimerTask activeTask;
+	private ActiveMortimerTask lastCompletedTask;
 	private boolean eliteCa;
+	private boolean slayerCape;
+	private Bracelet detectedBracelet = Bracelet.NONE;
+	private Set<String> blockedTasks = new LinkedHashSet<>();
 	private int slayerLevel = 99;
 	private int slayerPoints;
 	private String measurementTaskName = "";
@@ -97,7 +107,9 @@ public class MortimerHeartPlugin extends Plugin
 		wikiDpsResolver = new WikiDpsResolver(httpClient);
 		grindRecords = LocalGrindCodec.decode(config.localGrindData());
 		activeTask = ActiveMortimerTaskCodec.decode(config.activeTaskData());
+		blockedTasks = BlockedTaskCodec.decode(config.blockedTasksData());
 		overlayManager.add(recommendationOverlay);
+		overlayManager.add(braceletReminderOverlay);
 		SwingUtilities.invokeLater(() ->
 		{
 			panel = new MortimerHeartPanel(false, config.showMonsterVariants(), config.preferredGrind(),
@@ -121,7 +133,9 @@ public class MortimerHeartPlugin extends Plugin
 	protected void shutDown()
 	{
 		overlayManager.remove(recommendationOverlay);
+		overlayManager.remove(braceletReminderOverlay);
 		recommendationOverlay.clear();
+		braceletReminderOverlay.clear();
 		if (navigationButton != null)
 		{
 			clientToolbar.removeNavigation(navigationButton);
@@ -134,6 +148,7 @@ public class MortimerHeartPlugin extends Plugin
 		lastRecommendationSignature = "";
 		lastRecommendation = null;
 		lastDetectedOffers = new ArrayList<>();
+		blockedTasks = new LinkedHashSet<>();
 		grindRecords = new ArrayList<>();
 	}
 
@@ -144,8 +159,10 @@ public class MortimerHeartPlugin extends Plugin
 			return;
 		}
 		ActiveMortimerTask completed = activeTask;
+		lastCompletedTask = completed;
 		grindRecords.add(completed.toRecord());
 		activeTask = null;
+		braceletReminderOverlay.clear();
 		resetTaskMeasurement();
 		saveActiveTask();
 		saveGrindRecords();
@@ -170,6 +187,8 @@ public class MortimerHeartPlugin extends Plugin
 			return;
 		}
 		activeTask = null;
+		lastCompletedTask = null;
+		braceletReminderOverlay.clear();
 		resetTaskMeasurement();
 		saveActiveTask();
 		if (panel != null)
@@ -229,7 +248,21 @@ public class MortimerHeartPlugin extends Plugin
 	@Subscribe
 	public void onWidgetLoaded(WidgetLoaded event)
 	{
-		clientThread.invokeLater(this::scanMortimerScreen);
+		clientThread.invokeLater(() ->
+		{
+			scanMortimerBlockList();
+			scanMortimerScreen();
+		});
+	}
+
+	@Subscribe
+	public void onWidgetClosed(WidgetClosed event)
+	{
+		// Offer and Slayer-cape highlights are tied to widget bounds. Clear them as
+		// soon as any interface closes so a cached rectangle cannot remain painted
+		// over the game after Mortimer's dialogue has disappeared. The regular game
+		// tick scan will restore the highlight if the choice interface is still open.
+		recommendationOverlay.clear();
 	}
 
 	@Subscribe
@@ -255,6 +288,7 @@ public class MortimerHeartPlugin extends Plugin
 			return;
 		}
 		String message = event.getMessage().replaceAll("<[^>]+>", "").toLowerCase(Locale.ROOT);
+		syncBlockedTaskFromMessage(message);
 		if (syncAssignmentFromMessage(message))
 		{
 			return;
@@ -388,14 +422,48 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			SwingUtilities.invokeLater(() -> panel.setGrindPreference(config.preferredGrind()));
 		}
-		if ("showMonsterVariants".equals(event.getKey()) || "preferredGrind".equals(event.getKey()))
+		boolean manualBlockChanged = "manualBlockedTaskOne".equals(event.getKey())
+			|| "manualBlockedTaskTwo".equals(event.getKey());
+		if (manualBlockChanged)
+		{
+			lastRecommendationSignature = "";
+			updatePanelRoutingContext();
+		}
+		if ("showMonsterVariants".equals(event.getKey()) || "preferredGrind".equals(event.getKey())
+			|| manualBlockChanged)
 		{
 			clientThread.invokeLater(this::scanMortimerScreen);
+		}
+		if ("braceletReminder".equals(event.getKey()))
+		{
+			clientThread.invokeLater(this::refreshBraceletReminder);
+		}
+	}
+
+	private void saveBlockedTasks()
+	{
+		String encoded = BlockedTaskCodec.encode(blockedTasks);
+		configManager.setConfiguration(MortimerHeartConfig.GROUP, "blockedTasksData", encoded);
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "blockedTasksData", encoded);
 		}
 	}
 
 	private void scanMortimerScreen()
 	{
+		if (lastCompletedTask != null)
+		{
+			MortimerRepeatChoice repeatChoice = repeatChoiceReader.read(client);
+			if (repeatChoice != null)
+			{
+				boolean accept = shouldRepeat(lastCompletedTask);
+				recommendationOverlay.show(repeatChoice.recommendedBounds(accept),
+					accept ? MortimerOverlayRecommendation.Style.HEART : MortimerOverlayRecommendation.Style.POINT_SKIP,
+					accept ? "REPEAT · STRONG HEART" : "DECLINE · NEW OFFERS");
+				return;
+			}
+		}
 		List<MortimerOfferPlacement> placements = widgetReader.readScreen(client);
 		if (placements.isEmpty())
 		{
@@ -404,8 +472,10 @@ public class MortimerHeartPlugin extends Plugin
 		}
 		List<MortimerDetectedOffer> offers = placements.stream()
 			.map(MortimerOfferPlacement::getOffer).collect(Collectors.toList());
+		Set<String> effectiveBlocks = effectiveBlockedTasks();
 		String recommendationSignature = config.preferredGrind() + ":" + config.showMonsterVariants()
-			+ ":" + eliteCa + ":" + slayerLevel + ":" + slayerPoints + ":"
+			+ ":" + eliteCa + ":" + slayerLevel + ":" + slayerPoints + ":" + slayerCape
+			+ ":" + BlockedTaskCodec.encode(effectiveBlocks) + ":"
 			+ offers.stream().map(offer -> offer.getTask().getName() + ':' + offer.getAmount()
 				+ ':' + offer.getDropModifier() + ':' + offer.getXpModifier()
 				+ ':' + performance.killsPerHour(offer.getTask())).collect(Collectors.joining("|"));
@@ -414,7 +484,7 @@ public class MortimerHeartPlugin extends Plugin
 			lastRecommendationSignature = recommendationSignature;
 			lastRecommendation = MortimerOverlayRecommendationCalculator.calculate(
 				offers, config.showMonsterVariants(), config.preferredGrind(), eliteCa,
-				slayerLevel, slayerPoints, performance::killsPerHour);
+				slayerLevel, slayerPoints, effectiveBlocks, slayerCape, performance::killsPerHour);
 		}
 		recommendationOverlay.show(placements, lastRecommendation);
 		if (!offers.isEmpty())
@@ -432,10 +502,154 @@ public class MortimerHeartPlugin extends Plugin
 			return;
 		}
 		lastImportSignature = signature;
+		lastCompletedTask = null;
 		lastDetectedOffers = new ArrayList<>(offers);
 		if (panel != null)
 		{
 			SwingUtilities.invokeLater(() -> panel.importOffers(offers));
+		}
+	}
+
+	private void scanMortimerBlockList()
+	{
+		MortimerBlockListReader.Result detected = blockListReader.read(client);
+		if (detected == null)
+		{
+			return;
+		}
+		Set<String> updated = new LinkedHashSet<>(blockedTasks);
+		updated.addAll(detected.getBlocked());
+		updated.removeAll(detected.getUnblocked());
+		if (updated.equals(blockedTasks))
+		{
+			return;
+		}
+		blockedTasks = updated;
+		saveBlockedTasks();
+		lastRecommendationSignature = "";
+		updatePanelRoutingContext();
+	}
+
+	private void syncBlockedTaskFromMessage(String message)
+	{
+		boolean removal = message.contains("unblocked") || message.contains("removed from")
+			|| message.contains("will assign") || message.contains("can assign");
+		boolean addition = !removal && !message.contains("cannot") && !message.contains("can't")
+			&& (message.contains("have blocked") || message.contains("now blocked")
+				|| message.contains("will no longer assign"));
+		if (!removal && !addition)
+		{
+			return;
+		}
+		for (HeartTask task : HeartData.TASKS)
+		{
+			if (!HeartData.textContainsTask(message, task))
+			{
+				continue;
+			}
+			boolean changed = removal ? blockedTasks.remove(task.getName()) : blockedTasks.add(task.getName());
+			if (changed)
+			{
+				saveBlockedTasks();
+				lastRecommendationSignature = "";
+				updatePanelRoutingContext();
+			}
+			return;
+		}
+	}
+
+	private boolean shouldRepeat(ActiveMortimerTask task)
+	{
+		if (effectiveBlockedTasks().contains(task.getTaskName()))
+		{
+			return false;
+		}
+		OfferState offer = activeOffer(task);
+		return offer != null && HeartCalculator.calculate(offer, eliteCa).getHoursOnRate()
+			<= OptimalRoutingCalculator.TARGET_HEART_HOURS;
+	}
+
+	private OfferState activeOffer(ActiveMortimerTask task)
+	{
+		if (task == null || performance == null)
+		{
+			return null;
+		}
+		HeartTask heartTask = HeartData.findTask(task.getTaskName());
+		if (heartTask == null)
+		{
+			return null;
+		}
+		SuperiorOption superior = findSuperior(heartTask, task.getSuperiorName());
+		double kph = superior.effectiveKillsPerHour(performance.killsPerHour(heartTask));
+		return new OfferState(heartTask, superior, task.getAssignedAmount(),
+			Math.max(0.0, task.getDropModifier()), kph, Bracelet.NONE);
+	}
+
+	private static SuperiorOption findSuperior(HeartTask task, String name)
+	{
+		for (SuperiorOption superior : task.getSuperiors())
+		{
+			if (superior.getName().equals(name))
+			{
+				return superior;
+			}
+		}
+		return task.getSuperiors().get(0);
+	}
+
+	private void refreshBraceletReminder()
+	{
+		if (!config.braceletReminder() || activeTask == null)
+		{
+			braceletReminderOverlay.clear();
+			return;
+		}
+		OfferState offer = activeOffer(activeTask);
+		if (offer == null)
+		{
+			braceletReminderOverlay.clear();
+			return;
+		}
+		Bracelet recommended = BraceletAdvisor.recommend(offer, eliteCa);
+		if (recommended == detectedBracelet)
+		{
+			braceletReminderOverlay.clear();
+		}
+		else
+		{
+			braceletReminderOverlay.show(recommended);
+		}
+	}
+
+	private void updatePanelRoutingContext()
+	{
+		if (panel != null)
+		{
+			Set<String> snapshot = effectiveBlockedTasks();
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setRoutingContext(slayerLevel, slayerPoints, slayerCape, snapshot);
+				}
+			});
+		}
+	}
+
+	private Set<String> effectiveBlockedTasks()
+	{
+		Set<String> effective = new LinkedHashSet<>(blockedTasks);
+		addManualBlock(effective, config.manualBlockedTaskOne());
+		addManualBlock(effective, config.manualBlockedTaskTwo());
+		return effective;
+	}
+
+	private static void addManualBlock(Set<String> tasks, ManualBlockedTask manualBlock)
+	{
+		if (manualBlock != null && manualBlock.getTaskName() != null)
+		{
+			tasks.add(manualBlock.getTaskName());
 		}
 	}
 
@@ -463,10 +677,7 @@ public class MortimerHeartPlugin extends Plugin
 			boolean taskChanged = activeTask == null || !activeTask.getTaskName().equals(current.getName());
 			if (taskChanged && (activeTask == null || selected != null))
 			{
-				SuperiorOption superior = current.getSuperiors().get(0);
-				activeTask = new ActiveMortimerTask(current.getName(), superior.getName(), assigned,
-					superior.getHeartRate(), selected == null ? -1.0 : selected.getDropModifier(),
-					eliteCa ? 150.0 : 200.0);
+				activeTask = createActiveTask(current, assigned, selected);
 				resetTaskMeasurement();
 				saveActiveTask();
 				lastDetectedOffers = new ArrayList<>();
@@ -502,6 +713,7 @@ public class MortimerHeartPlugin extends Plugin
 					panel.setActualDps(actualDps);
 				}
 			});
+			refreshBraceletReminder();
 		}
 	}
 
@@ -535,10 +747,7 @@ public class MortimerHeartPlugin extends Plugin
 			&& profileAssigned >= remaining ? profileAssigned : remaining;
 		if (activeTask == null || !activeTask.getTaskName().equals(detectedTask.getName()))
 		{
-			SuperiorOption superior = detectedTask.getSuperiors().get(0);
-			activeTask = new ActiveMortimerTask(detectedTask.getName(), superior.getName(), assigned,
-				superior.getHeartRate(), selected == null ? -1.0 : selected.getDropModifier(),
-				eliteCa ? 150.0 : 200.0);
+			activeTask = createActiveTask(detectedTask, assigned, selected);
 			resetTaskMeasurement();
 			saveActiveTask();
 			lastDetectedOffers = new ArrayList<>();
@@ -555,7 +764,30 @@ public class MortimerHeartPlugin extends Plugin
 				}
 			});
 		}
+		refreshBraceletReminder();
 		return true;
+	}
+
+	private ActiveMortimerTask createActiveTask(HeartTask task, int assigned, MortimerDetectedOffer selected)
+	{
+		SuperiorOption superior = task.getSuperiors().get(0);
+		double modifier = selected == null ? -1.0 : selected.getDropModifier();
+		if (selected == null && lastCompletedTask != null
+			&& task.getName().equals(lastCompletedTask.getTaskName()))
+		{
+			for (SuperiorOption candidate : task.getSuperiors())
+			{
+				if (candidate.getName().equals(lastCompletedTask.getSuperiorName()))
+				{
+					superior = candidate;
+					break;
+				}
+			}
+			modifier = lastCompletedTask.getDropModifier();
+		}
+		lastCompletedTask = null;
+		return new ActiveMortimerTask(task.getName(), superior.getName(), assigned,
+			superior.getHeartRate(), modifier, eliteCa ? 150.0 : 200.0);
 	}
 
 	private void selectActiveVariant(SuperiorOption superior)
@@ -571,6 +803,7 @@ public class MortimerHeartPlugin extends Plugin
 		}
 		activeTask = activeTask.withSuperior(superior);
 		saveActiveTask();
+		refreshBraceletReminder();
 		int remaining = profileInt("amount");
 		ActiveMortimerTask snapshot = activeTask;
 		if (panel != null)
@@ -593,6 +826,7 @@ public class MortimerHeartPlugin extends Plugin
 		}
 		activeTask = activeTask.withDropModifier(modifier);
 		saveActiveTask();
+		refreshBraceletReminder();
 		int remaining = slayerPluginService.getRemainingAmount();
 		if (remaining <= 0)
 		{
@@ -639,6 +873,7 @@ public class MortimerHeartPlugin extends Plugin
 		loadedRsProfileKey = profileKey;
 		String remoteGrind = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "localGrindData");
 		String remoteActive = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "activeTaskData");
+		String remoteBlocks = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "blockedTasksData");
 		if (remoteGrind == null || remoteGrind.trim().isEmpty())
 		{
 			saveGrindRecords();
@@ -658,6 +893,15 @@ public class MortimerHeartPlugin extends Plugin
 			configManager.setConfiguration(MortimerHeartConfig.GROUP, "activeTaskData", remoteActive);
 			resetTaskMeasurement();
 		}
+		if (remoteBlocks == null || remoteBlocks.trim().isEmpty())
+		{
+			saveBlockedTasks();
+		}
+		else
+		{
+			blockedTasks = BlockedTaskCodec.decode(remoteBlocks);
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "blockedTasksData", remoteBlocks);
+		}
 		if (panel != null)
 		{
 			GrindSummary summary = GrindSummary.from(grindRecords);
@@ -670,9 +914,11 @@ public class MortimerHeartPlugin extends Plugin
 					panel.setGrindSummary(summary);
 					panel.setActiveTask(taskSnapshot, taskSnapshot == null ? 0
 						: remaining > 0 ? remaining : taskSnapshot.getAssignedAmount());
+					panel.setRoutingContext(slayerLevel, slayerPoints, slayerCape, effectiveBlockedTasks());
 				}
 			});
 		}
+		refreshBraceletReminder();
 	}
 
 	private void recordSuperiorRoll()
@@ -781,7 +1027,8 @@ public class MortimerHeartPlugin extends Plugin
 		}
 		ItemContainer equipment = client.getItemContainer(InventoryID.EQUIPMENT);
 		int equippedCount = equipment == null ? 0 : equipment.count();
-		Bracelet bracelet = detectBracelet(equipment);
+		detectedBracelet = detectBracelet(equipment);
+		slayerCape = detectSlayerCape(equipment);
 		int attack = client.getRealSkillLevel(Skill.ATTACK);
 		int strength = client.getRealSkillLevel(Skill.STRENGTH);
 		int ranged = client.getRealSkillLevel(Skill.RANGED);
@@ -791,10 +1038,11 @@ public class MortimerHeartPlugin extends Plugin
 			if (panel != null)
 			{
 				panel.setClientSnapshot(attack, strength, ranged, magic, equippedCount);
-				panel.setDetectedBracelet(bracelet);
-				panel.setRoutingContext(slayerLevel, slayerPoints);
+				panel.setDetectedBracelet(detectedBracelet);
+				panel.setRoutingContext(slayerLevel, slayerPoints, slayerCape, effectiveBlockedTasks());
 			}
 		});
+		refreshBraceletReminder();
 	}
 
 	private void updateEliteCaFromClient()
@@ -809,6 +1057,8 @@ public class MortimerHeartPlugin extends Plugin
 			return;
 		}
 		eliteCa = detected;
+		lastRecommendationSignature = "";
+		refreshBraceletReminder();
 		if (panel != null)
 		{
 			SwingUtilities.invokeLater(() ->
@@ -839,6 +1089,30 @@ public class MortimerHeartPlugin extends Plugin
 			}
 		}
 		return Bracelet.NONE;
+	}
+
+	private boolean detectSlayerCape(ItemContainer equipment)
+	{
+		if (equipment == null)
+		{
+			return false;
+		}
+		for (Item item : equipment.getItems())
+		{
+			int id = item.getId();
+			if (id == net.runelite.api.ItemID.SLAYER_CAPE
+				|| id == net.runelite.api.ItemID.SLAYER_CAPET
+				|| id == net.runelite.api.ItemID.MAX_CAPE)
+			{
+				return true;
+			}
+			String name = client.getItemDefinition(id).getName().toLowerCase(Locale.ROOT);
+			if (name.contains("slayer cape") || name.contains("max cape"))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 }

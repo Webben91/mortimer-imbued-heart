@@ -59,9 +59,14 @@ final class MortimerRecommendationOverlay extends Overlay
 			clear();
 			return;
 		}
-		Rectangle bounds = placements.get(recommendation.getOfferIndex()).getBounds();
-		highlight = bounds.width > 0 && bounds.height > 0
-			? new Highlight(bounds, recommendation.getStyle(), recommendation.getLabel()) : null;
+		show(placements.get(recommendation.getOfferIndex()).getBounds(),
+			recommendation.getStyle(), recommendation.getLabel());
+	}
+
+	void show(Rectangle bounds, MortimerOverlayRecommendation.Style style, String label)
+	{
+		highlight = bounds != null && bounds.width > 0 && bounds.height > 0
+			? new Highlight(bounds, style, label) : null;
 	}
 
 	void clear()

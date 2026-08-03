@@ -32,6 +32,39 @@ public interface MortimerHeartConfig extends Config
 		return GrindPreference.IMBUED_HEART;
 	}
 
+	@ConfigItem(
+		keyName = "braceletReminder",
+		name = "Bracelet reminder",
+		description = "Flash an in-game reminder when the active task's recommended Slayer bracelet is not equipped",
+		position = 2
+	)
+	default boolean braceletReminder()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "manualBlockedTaskOne",
+		name = "Manual block 1",
+		description = "Add a task to routing calculations when RuneLite cannot read your in-game block list",
+		position = 3
+	)
+	default ManualBlockedTask manualBlockedTaskOne()
+	{
+		return ManualBlockedTask.NONE;
+	}
+
+	@ConfigItem(
+		keyName = "manualBlockedTaskTwo",
+		name = "Manual block 2",
+		description = "Add a second task to routing calculations when RuneLite cannot read your in-game block list",
+		position = 4
+	)
+	default ManualBlockedTask manualBlockedTaskTwo()
+	{
+		return ManualBlockedTask.NONE;
+	}
+
 	@ConfigSection(
 		name = "Aberrant spectres",
 		description = "DPS and cannon settings for Aberrant spectres",
@@ -978,6 +1011,17 @@ public interface MortimerHeartConfig extends Config
 		hidden = true
 	)
 	default String activeTaskData()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "blockedTasksData",
+		name = "Detected Mortimer blocks",
+		description = "Mortimer's blocked tasks detected from the in-game block list",
+		hidden = true
+	)
+	default String blockedTasksData()
 	{
 		return "";
 	}

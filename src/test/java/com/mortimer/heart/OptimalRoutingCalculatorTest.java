@@ -70,6 +70,26 @@ public class OptimalRoutingCalculatorTest
 		assertEquals(1.0 - result.getTaskChance(), outcome.getFailureChance(), 1e-12);
 	}
 
+	@Test
+	public void slayerCapeRepeatLowersCostForStrongHeartTask()
+	{
+		OfferState offer = offer("Smoke devils", 100, 800, 0);
+		OptimalRoutingCalculator.TaskOutcome outcome = OptimalRoutingCalculator.outcome(offer, true);
+
+		assertTrue(outcome.costWithContinuation(100.0, true)
+			< outcome.costWithContinuation(100.0, false));
+	}
+
+	@Test
+	public void detectedBlocksAreRemovedFromFuturePool()
+	{
+		List<MortimerRoutingData.Profile> profiles = MortimerRoutingData.eligibleProfiles(99,
+			new java.util.LinkedHashSet<>(Arrays.asList("Turoth", "Kurask")));
+
+		assertTrue(profiles.stream().noneMatch(profile -> profile.getTask().getName().equals("Turoth")));
+		assertTrue(profiles.stream().noneMatch(profile -> profile.getTask().getName().equals("Kurask")));
+	}
+
 	private static RoutingDecision calculate(int points, OfferState... offers)
 	{
 		return OptimalRoutingCalculator.calculate(Arrays.asList(offers), true, 99, points, 3,

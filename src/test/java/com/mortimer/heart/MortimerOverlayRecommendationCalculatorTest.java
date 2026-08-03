@@ -19,7 +19,7 @@ public class MortimerOverlayRecommendationCalculatorTest
 
 		assertEquals(0, recommendation.getOfferIndex());
 		assertEquals(MortimerOverlayRecommendation.Style.HEART, recommendation.getStyle());
-		assertEquals("RECOMMENDED · BEST HEART", recommendation.getLabel());
+		assertEquals("BEST HEART · SLAUGHTER", recommendation.getLabel());
 	}
 
 	@Test
@@ -45,7 +45,7 @@ public class MortimerOverlayRecommendationCalculatorTest
 			offer("Banshees", 35, 0, 0));
 
 		assertEquals(MortimerOverlayRecommendation.Style.FAST_REROLL, recommendation.getStyle());
-		assertEquals("RECOMMENDED · FAST REROLL", recommendation.getLabel());
+		assertEquals("FAST REROLL · EXPEDITIOUS", recommendation.getLabel());
 	}
 
 	@Test

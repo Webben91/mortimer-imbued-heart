@@ -1,9 +1,10 @@
 package com.mortimer.heart;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
+import java.util.Collections;
+import java.util.Set;
 import java.util.function.ToDoubleFunction;
 
 final class OptimalRoutingCalculator
@@ -13,6 +14,7 @@ final class OptimalRoutingCalculator
 	static final double POINT_SKIP_HOURS = 30.0 / 3600.0;
 	private static final int SAMPLE_COUNT = 6000;
 	private static final long RANDOM_SEED = 0x4d4f5254494d4552L;
+	private static final double SLAYER_CAPE_REPEAT_CHANCE = 0.10;
 
 	private OptimalRoutingCalculator()
 	{
@@ -20,6 +22,14 @@ final class OptimalRoutingCalculator
 
 	static RoutingDecision calculate(List<OfferState> currentOffers, boolean eliteCombatAchievements,
 		int slayerLevel, int slayerPoints, int futureChoiceCount, ToDoubleFunction<HeartTask> killsPerHour)
+	{
+		return calculate(currentOffers, eliteCombatAchievements, slayerLevel, slayerPoints,
+			futureChoiceCount, Collections.emptySet(), false, killsPerHour);
+	}
+
+	static RoutingDecision calculate(List<OfferState> currentOffers, boolean eliteCombatAchievements,
+		int slayerLevel, int slayerPoints, int futureChoiceCount, Set<String> blockedTasks,
+		boolean slayerCape, ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		if (currentOffers.isEmpty())
 		{
@@ -43,11 +53,12 @@ final class OptimalRoutingCalculator
 			eliteCombatAchievements).getTaskHours();
 
 		List<FutureSet> samples = sampleFutureSets(eliteCombatAchievements, slayerLevel,
-			Math.max(2, Math.min(3, futureChoiceCount)), killsPerHour);
-		double noPointFuture = solveFutureValue(samples, Double.POSITIVE_INFINITY);
+			Math.max(2, Math.min(3, futureChoiceCount)), blockedTasks, killsPerHour);
+		double noPointFuture = solveFutureValue(samples, Double.POSITIVE_INFINITY, slayerCape);
 		boolean pointSkipAvailable = slayerPoints >= 100;
 		double pointSkipCost = POINT_SKIP_HOURS + noPointFuture;
-		double retainedPointFuture = pointSkipAvailable ? solveFutureValue(samples, pointSkipCost) : noPointFuture;
+		double retainedPointFuture = pointSkipAvailable
+			? solveFutureValue(samples, pointSkipCost, slayerCape) : noPointFuture;
 
 		int primaryIndex = 0;
 		Bracelet primaryBracelet = Bracelet.NONE;
@@ -57,7 +68,7 @@ final class OptimalRoutingCalculator
 			for (Bracelet bracelet : Bracelet.values())
 			{
 				TaskOutcome outcome = outcome(withBracelet(currentOffers.get(index), bracelet), eliteCombatAchievements);
-				double cost = outcome.hoursBeforeExit + outcome.failureChance * retainedPointFuture;
+				double cost = outcome.costWithContinuation(retainedPointFuture, slayerCape);
 				if (cost < bestTaskCost)
 				{
 					bestTaskCost = cost;
@@ -82,10 +93,16 @@ final class OptimalRoutingCalculator
 		{
 			type = RoutingDecision.Type.FAST_REROLL;
 		}
-		else
+		else if (baseResults.get(primaryIndex).getHoursOnRate() > TARGET_HEART_HOURS)
 		{
 			primaryIndex = bestHeartIndex;
-			primaryBracelet = Bracelet.NONE;
+			primaryBracelet = BraceletAdvisor.recommend(currentOffers.get(bestHeartIndex), eliteCombatAchievements);
+		}
+		if (type == RoutingDecision.Type.HUNT)
+		{
+			primaryBracelet = BraceletAdvisor.recommend(currentOffers.get(primaryIndex), eliteCombatAchievements);
+			expectedHours = outcome(withBracelet(currentOffers.get(primaryIndex), primaryBracelet),
+				eliteCombatAchievements).costWithContinuation(retainedPointFuture, slayerCape);
 		}
 
 		return new RoutingDecision(type, primaryIndex, bestHeartIndex, fastestFallbackIndex,
@@ -93,9 +110,9 @@ final class OptimalRoutingCalculator
 	}
 
 	private static List<FutureSet> sampleFutureSets(boolean eliteCombatAchievements, int slayerLevel,
-		int choiceCount, ToDoubleFunction<HeartTask> killsPerHour)
+		int choiceCount, Set<String> blockedTasks, ToDoubleFunction<HeartTask> killsPerHour)
 	{
-		List<MortimerRoutingData.Profile> eligible = MortimerRoutingData.eligibleProfiles(slayerLevel);
+		List<MortimerRoutingData.Profile> eligible = MortimerRoutingData.eligibleProfiles(slayerLevel, blockedTasks);
 		if (eligible.size() < choiceCount)
 		{
 			return new ArrayList<>();
@@ -122,15 +139,17 @@ final class OptimalRoutingCalculator
 				{
 					modifier = between(random, profile.getSuperiorMin(), profile.getSuperiorMax(), 5);
 				}
-				SuperiorOption superior = task.getSuperiors().stream()
-					.min(Comparator.comparingDouble(SuperiorOption::getHeartRate)).orElse(task.getSuperiors().get(0));
-				double kph = Math.max(1.0, killsPerHour.applyAsDouble(task));
-				OfferState base = new OfferState(task, superior, amount, modifier, kph, Bracelet.NONE);
-				bestOnRate = Math.min(bestOnRate,
-					HeartCalculator.calculate(base, eliteCombatAchievements).getHoursOnRate());
-				for (Bracelet bracelet : Bracelet.values())
+				double taskKph = Math.max(1.0, killsPerHour.applyAsDouble(task));
+				for (SuperiorOption superior : task.getSuperiors())
 				{
-					outcomes.add(outcome(withBracelet(base, bracelet), eliteCombatAchievements));
+					double kph = superior.effectiveKillsPerHour(taskKph);
+					OfferState base = new OfferState(task, superior, amount, modifier, kph, Bracelet.NONE);
+					bestOnRate = Math.min(bestOnRate,
+						HeartCalculator.calculate(base, eliteCombatAchievements).getHoursOnRate());
+					for (Bracelet bracelet : Bracelet.values())
+					{
+						outcomes.add(outcome(withBracelet(base, bracelet), eliteCombatAchievements));
+					}
 				}
 			}
 			samples.add(new FutureSet(outcomes, bestOnRate));
@@ -138,7 +157,7 @@ final class OptimalRoutingCalculator
 		return samples;
 	}
 
-	private static double solveFutureValue(List<FutureSet> samples, double skipCost)
+	private static double solveFutureValue(List<FutureSet> samples, double skipCost, boolean slayerCape)
 	{
 		if (samples.isEmpty())
 		{
@@ -146,14 +165,14 @@ final class OptimalRoutingCalculator
 		}
 		double low = 0.0;
 		double high = 1000.0;
-		while (futureValueAt(samples, high, skipCost) > high && high < 1_000_000.0)
+		while (futureValueAt(samples, high, skipCost, slayerCape) > high && high < 1_000_000.0)
 		{
 			high *= 2.0;
 		}
 		for (int iteration = 0; iteration < 70; iteration++)
 		{
 			double middle = (low + high) / 2.0;
-			if (futureValueAt(samples, middle, skipCost) > middle)
+			if (futureValueAt(samples, middle, skipCost, slayerCape) > middle)
 			{
 				low = middle;
 			}
@@ -165,7 +184,8 @@ final class OptimalRoutingCalculator
 		return (low + high) / 2.0;
 	}
 
-	private static double futureValueAt(List<FutureSet> samples, double continuationHours, double skipCost)
+	private static double futureValueAt(List<FutureSet> samples, double continuationHours,
+		double skipCost, boolean slayerCape)
 	{
 		double total = 0.0;
 		for (FutureSet sample : samples)
@@ -173,7 +193,7 @@ final class OptimalRoutingCalculator
 			double best = skipCost;
 			for (TaskOutcome candidate : sample.outcomes)
 			{
-				best = Math.min(best, candidate.hoursBeforeExit + candidate.failureChance * continuationHours);
+				best = Math.min(best, candidate.costWithContinuation(continuationHours, slayerCape));
 			}
 			total += best;
 		}
@@ -184,6 +204,10 @@ final class OptimalRoutingCalculator
 	{
 		HeartResult result = HeartCalculator.calculate(offer, eliteCombatAchievements);
 		double failureChance = 1.0 - result.getTaskChance();
+		if (!Double.isFinite(result.getHeartPerKill()) || result.getTaskChance() <= 0.0)
+		{
+			return new TaskOutcome(result.getTaskHours(), 1.0);
+		}
 		double successPerKill = 1.0 / result.getHeartPerKill();
 		double expectedKillsBeforeExit = (1.0 - failureChance) / successPerKill;
 		return new TaskOutcome(expectedKillsBeforeExit / Math.max(1.0, offer.getKillsPerHour()), failureChance);
@@ -245,6 +269,19 @@ final class OptimalRoutingCalculator
 
 		double getHoursBeforeExit() { return hoursBeforeExit; }
 		double getFailureChance() { return failureChance; }
+
+		double costWithContinuation(double continuationHours, boolean slayerCape)
+		{
+			double declineRepeat = hoursBeforeExit + failureChance * continuationHours;
+			if (!slayerCape)
+			{
+				return declineRepeat;
+			}
+			double repeat = (hoursBeforeExit
+				+ failureChance * (1.0 - SLAYER_CAPE_REPEAT_CHANCE) * continuationHours)
+				/ Math.max(1e-12, 1.0 - failureChance * SLAYER_CAPE_REPEAT_CHANCE);
+			return Math.min(declineRepeat, repeat);
+		}
 	}
 
 	private static final class FutureSet
