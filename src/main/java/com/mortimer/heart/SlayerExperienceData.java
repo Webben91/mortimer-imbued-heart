@@ -58,7 +58,9 @@ final class SlayerExperienceData
 	{
 		double experience = XP_PER_KILL.getOrDefault(offer.getSuperior().getMonsterName(), 0.0);
 		double modifier = 1.0 + Math.max(0.0, offer.getXpModifier()) / 100.0;
-		return experience * Math.max(1.0, offer.getKillsPerHour()) * modifier;
+		double actualKills = Math.max(1.0, offer.getBracelet().adjustKills(offer.getAmount()));
+		double taskHours = actualKills / Math.max(1.0, offer.getKillsPerHour()) + offer.getOverheadHours();
+		return experience * actualKills / Math.max(1e-12, taskHours) * modifier;
 	}
 
 	static double experiencePerKill(String monsterName)

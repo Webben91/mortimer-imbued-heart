@@ -1,6 +1,7 @@
 package com.mortimer.heart;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import org.junit.Test;
 
@@ -88,6 +89,32 @@ public class OptimalRoutingCalculatorTest
 
 		assertTrue(profiles.stream().noneMatch(profile -> profile.getTask().getName().equals("Turoth")));
 		assertTrue(profiles.stream().noneMatch(profile -> profile.getTask().getName().equals("Kurask")));
+	}
+
+	@Test
+	public void alwaysTakePreferenceOverridesAPointSkip()
+	{
+		List<OfferState> offers = Arrays.asList(
+			offer("Rockslugs", 100, 20, 0),
+			offer("Crawling hands", 100, 20, 0),
+			offer("Banshees", 100, 20, 0));
+
+		RoutingDecision decision = OptimalRoutingCalculator.calculate(offers, true, 99, 500, 3,
+			Collections.emptySet(), false, task -> task.getDefaultKph(), (task, amount) -> 0.0,
+			task -> task.getName().equals("Banshees") ? TaskPreference.ALWAYS : TaskPreference.STANDARD);
+
+		assertEquals(RoutingDecision.Type.HUNT, decision.getType());
+		assertEquals("Banshees", offers.get(decision.getPrimaryIndex()).getTask().getName());
+	}
+
+	@Test
+	public void earlyExitStillPaysFixedAssignmentOverhead()
+	{
+		HeartTask smoke = HeartData.findTask("Smoke devils");
+		OfferState offer = new OfferState(smoke, smoke.getSuperiors().get(0), 100, 100,
+			0, 800, 0.25, Bracelet.NONE);
+
+		assertTrue(OptimalRoutingCalculator.outcome(offer, true).getHoursBeforeExit() >= 0.25);
 	}
 
 	private static RoutingDecision calculate(int points, OfferState... offers)

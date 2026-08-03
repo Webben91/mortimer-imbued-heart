@@ -15,7 +15,13 @@ A local RuneLite sidebar planner for comparing Mortimer Slayer offers by Imbued 
 - Store grind history and the active task in the character's RuneScape-profile configuration, while retaining a local backup. Cross-PC transfer requires RuneLite cloud sync to be enabled for the selected configuration profile.
 - Switch automatically between the Mortimer offer comparison and a single live-task card showing remaining kills, actual superiors, current-task odds, chance accumulated so far and estimated time remaining.
 - Optionally expand assignments with multiple valid monster variants into separate comparison cards, offer a live-task variant selector, and automatically switch the selected variant when the player attacks a recognised monster.
+- Label expanded variants by their actual route, such as Banshees and Twisted banshees, instead of repeating the assignment name.
 - Show expected DPS plus a session estimate derived from live task progress after enough data has been collected.
+- Optionally learn end-to-end task pace from completed assignments and sync those samples with the character's RuneScape profile.
+- Configure a direct final KPH override, travel time and personal preference for any supported task from one collapsed Personal pace editor.
+- Apply banking/gearing and travel overhead to task time, Heart chance per hour, Slayer XP per hour and long-term routing calculations.
+- Explain whether a recommendation is a near tie, competitive or strong, and identify when a personal preference overrides the numerical leader.
+- Keep a configurable Slayer-point reserve so a suggested 100-point skip never spends below the player's chosen safety balance.
 - Keep a fully local grind ledger with cumulative Imbued Heart chance, expected Hearts, tasks and assigned kills; the last automatic record can be undone.
 - Detect Elite-or-higher Combat Achievements from RuneLite's `CA_THRESHOLD_ELITE` account varbit and automatically use `1/150`; otherwise use `1/200`.
 - Directly scans the open Mortimer choice interface using RuneLite widgets whenever it opens, independent of window size or theme; no refresh button is needed.

@@ -41,4 +41,24 @@ public class HeartCalculatorTest
 		assertTrue(combined > first.getTaskChance());
 		assertTrue(combined > second.getTaskChance());
 	}
+
+	@Test
+	public void assignmentOverheadReducesHourlyEfficiencyWithoutChangingTaskChance()
+	{
+		HeartTask smoke = HeartData.findTask("Smoke devils");
+		OfferState noTravel = new OfferState(smoke, smoke.getSuperiors().get(0), 100, 100,
+			0, 460, 0, Bracelet.NONE);
+		OfferState withTravel = new OfferState(smoke, smoke.getSuperiors().get(0), 100, 100,
+			0, 460, 10.0 / 60.0, Bracelet.NONE);
+
+		HeartResult base = HeartCalculator.calculate(noTravel, true);
+		HeartResult delayed = HeartCalculator.calculate(withTravel, true);
+
+		assertEquals(base.getTaskChance(), delayed.getTaskChance(), 0.0000001);
+		assertTrue(delayed.getTaskHours() > base.getTaskHours());
+		assertTrue(delayed.getChancePerHour() < base.getChancePerHour());
+		assertTrue(delayed.getHoursOnRate() > base.getHoursOnRate());
+		assertTrue(SlayerExperienceData.experiencePerHour(withTravel)
+			< SlayerExperienceData.experiencePerHour(noTravel));
+	}
 }

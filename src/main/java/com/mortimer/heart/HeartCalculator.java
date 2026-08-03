@@ -18,11 +18,12 @@ final class HeartCalculator
 		double actualKills = Math.max(1.0, offer.getBracelet().adjustKills(offer.getAmount()));
 		double killsPerHour = Math.max(1.0, offer.getKillsPerHour());
 		double taskChance = atLeastOneChance(actualKills, heartPerKill);
-		double chancePerHour = atLeastOneChance(killsPerHour, heartPerKill);
 		double expectedSuperiors = actualKills / spawnRate;
-		double taskHours = actualKills / killsPerHour;
+		double taskHours = actualKills / killsPerHour + offer.getOverheadHours();
+		double effectiveKillsPerHour = actualKills / Math.max(1e-12, taskHours);
+		double chancePerHour = atLeastOneChance(effectiveKillsPerHour, heartPerKill);
 		double hoursOnRate = Double.isFinite(heartPerKill)
-			? heartPerKill / killsPerHour : Double.POSITIVE_INFINITY;
+			? heartPerKill / effectiveKillsPerHour : Double.POSITIVE_INFINITY;
 		return new HeartResult(offer, actualKills, heartPerSuperior, heartPerKill, taskChance,
 			chancePerHour, expectedSuperiors, taskHours, hoursOnRate);
 	}

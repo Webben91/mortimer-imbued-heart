@@ -16,6 +16,6 @@ final class BraceletAdvisor
 	private static OfferState withBracelet(OfferState offer, Bracelet bracelet)
 	{
 		return new OfferState(offer.getTask(), offer.getSuperior(), offer.getAmount(), offer.getDropModifier(),
-			offer.getXpModifier(), offer.getKillsPerHour(), bracelet);
+			offer.getXpModifier(), offer.getKillsPerHour(), offer.getOverheadHours(), bracelet);
 	}
 }

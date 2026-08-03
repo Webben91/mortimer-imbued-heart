@@ -1,5 +1,7 @@
 package com.mortimer.heart;
 
+import java.util.Locale;
+
 final class SuperiorOption
 {
 	private final String monsterName;
@@ -50,9 +52,32 @@ final class SuperiorOption
 		return normalize(monsterName).equals(normalize(candidate));
 	}
 
+	String taskDisplayName(HeartTask task)
+	{
+		if (task == null || task.getSuperiors().size() <= 1 || task.getSuperiors().get(0) == this)
+		{
+			return task == null ? monsterName : task.getName();
+		}
+		return pluralize(monsterName);
+	}
+
 	private static String normalize(String value)
 	{
 		return value == null ? "" : value.toLowerCase().replaceAll("[^a-z0-9]+", "");
+	}
+
+	private static String pluralize(String value)
+	{
+		String lower = value.toLowerCase(Locale.ROOT);
+		if (lower.endsWith("y") && value.length() > 1)
+		{
+			char before = Character.toLowerCase(value.charAt(value.length() - 2));
+			if ("aeiou".indexOf(before) < 0)
+			{
+				return value.substring(0, value.length() - 1) + "ies";
+			}
+		}
+		return lower.endsWith("s") ? value : value + "s";
 	}
 
 	@Override

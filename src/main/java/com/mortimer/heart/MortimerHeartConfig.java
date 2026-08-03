@@ -65,6 +65,97 @@ public interface MortimerHeartConfig extends Config
 		return ManualBlockedTask.NONE;
 	}
 
+	@ConfigItem(
+		keyName = "slayerPointReserve",
+		name = "Slayer point reserve",
+		description = "Never recommend a 100-point skip if it would take your balance below this reserve",
+		position = 5
+	)
+	default int slayerPointReserve()
+	{
+		return 0;
+	}
+
+	@ConfigSection(
+		name = "Personal pace",
+		description = "Calibrate task timing and personal task preferences",
+		position = 6,
+		closedByDefault = true
+	)
+	String personalPaceSection = "personalPaceSection";
+
+	@ConfigItem(
+		keyName = "paceMode",
+		name = "Pace source",
+		description = "Use planning/manual values, or task pace learned from completed assignments when available",
+		position = 0,
+		section = personalPaceSection
+	)
+	default PaceMode paceMode()
+	{
+		return PaceMode.PLANNING;
+	}
+
+	@ConfigItem(
+		keyName = "preparationSeconds",
+		name = "Preparation seconds",
+		description = "Fixed banking and gearing time added once to every assignment; learned pace already includes this time",
+		position = 1,
+		section = personalPaceSection
+	)
+	default int preparationSeconds()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "personalPaceTask",
+		name = "Task to configure",
+		description = "Select the task whose personal settings are shown below",
+		position = 2,
+		section = personalPaceSection
+	)
+	default PersonalPaceTask personalPaceTask()
+	{
+		return PersonalPaceTask.ABERRANT_SPECTRES;
+	}
+
+	@ConfigItem(
+		keyName = "personalKillsPerHour",
+		name = "Final kills per hour",
+		description = "Optional direct KPH override for the selected task; zero keeps the existing DPS, Wiki or planning pace",
+		position = 3,
+		section = personalPaceSection
+	)
+	default double personalKillsPerHour()
+	{
+		return 0.0;
+	}
+
+	@ConfigItem(
+		keyName = "personalTravelSeconds",
+		name = "Travel seconds",
+		description = "Time from being geared to reaching the selected task, added once per assignment",
+		position = 4,
+		section = personalPaceSection
+	)
+	default int personalTravelSeconds()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "personalTaskPreference",
+		name = "Task preference",
+		description = "Prefer competitive tasks, or always take this task regardless of the numerical recommendation",
+		position = 5,
+		section = personalPaceSection
+	)
+	default TaskPreference personalTaskPreference()
+	{
+		return TaskPreference.STANDARD;
+	}
+
 	@ConfigSection(
 		name = "Aberrant spectres",
 		description = "DPS and cannon settings for Aberrant spectres",
@@ -1022,6 +1113,28 @@ public interface MortimerHeartConfig extends Config
 		hidden = true
 	)
 	default String blockedTasksData()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "personalPaceData",
+		name = "Personal pace data",
+		description = "Saved per-task KPH, travel and preference settings",
+		hidden = true
+	)
+	default String personalPaceData()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "learnedPaceData",
+		name = "Learned pace data",
+		description = "Task pace learned from completed assignments",
+		hidden = true
+	)
+	default String learnedPaceData()
 	{
 		return "";
 	}

@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Random;
 import java.util.Collections;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.function.ToDoubleBiFunction;
 import java.util.function.ToDoubleFunction;
 
 final class OptimalRoutingCalculator
@@ -24,12 +26,24 @@ final class OptimalRoutingCalculator
 		int slayerLevel, int slayerPoints, int futureChoiceCount, ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		return calculate(currentOffers, eliteCombatAchievements, slayerLevel, slayerPoints,
-			futureChoiceCount, Collections.emptySet(), false, killsPerHour);
+			futureChoiceCount, Collections.emptySet(), false, killsPerHour, (task, amount) -> 0.0,
+			task -> TaskPreference.STANDARD);
 	}
 
 	static RoutingDecision calculate(List<OfferState> currentOffers, boolean eliteCombatAchievements,
 		int slayerLevel, int slayerPoints, int futureChoiceCount, Set<String> blockedTasks,
 		boolean slayerCape, ToDoubleFunction<HeartTask> killsPerHour)
+	{
+		return calculate(currentOffers, eliteCombatAchievements, slayerLevel, slayerPoints,
+			futureChoiceCount, blockedTasks, slayerCape, killsPerHour, (task, amount) -> 0.0,
+			task -> TaskPreference.STANDARD);
+	}
+
+	static RoutingDecision calculate(List<OfferState> currentOffers, boolean eliteCombatAchievements,
+		int slayerLevel, int slayerPoints, int futureChoiceCount, Set<String> blockedTasks,
+		boolean slayerCape, ToDoubleFunction<HeartTask> killsPerHour,
+		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
+		Function<HeartTask, TaskPreference> taskPreference)
 	{
 		if (currentOffers.isEmpty())
 		{
@@ -53,7 +67,7 @@ final class OptimalRoutingCalculator
 			eliteCombatAchievements).getTaskHours();
 
 		List<FutureSet> samples = sampleFutureSets(eliteCombatAchievements, slayerLevel,
-			Math.max(2, Math.min(3, futureChoiceCount)), blockedTasks, killsPerHour);
+			Math.max(2, Math.min(3, futureChoiceCount)), blockedTasks, killsPerHour, overheadHours);
 		double noPointFuture = solveFutureValue(samples, Double.POSITIVE_INFINITY, slayerCape);
 		boolean pointSkipAvailable = slayerPoints >= 100;
 		double pointSkipCost = POINT_SKIP_HOURS + noPointFuture;
@@ -63,28 +77,51 @@ final class OptimalRoutingCalculator
 		int primaryIndex = 0;
 		Bracelet primaryBracelet = Bracelet.NONE;
 		double bestTaskCost = Double.POSITIVE_INFINITY;
+		double[] taskCosts = new double[currentOffers.size()];
+		Bracelet[] taskBracelets = new Bracelet[currentOffers.size()];
 		for (int index = 0; index < currentOffers.size(); index++)
 		{
+			double bestOfferCost = Double.POSITIVE_INFINITY;
+			Bracelet bestOfferBracelet = Bracelet.NONE;
 			for (Bracelet bracelet : Bracelet.values())
 			{
 				TaskOutcome outcome = outcome(withBracelet(currentOffers.get(index), bracelet), eliteCombatAchievements);
 				double cost = outcome.costWithContinuation(retainedPointFuture, slayerCape);
-				if (cost < bestTaskCost)
+				if (cost < bestOfferCost)
 				{
-					bestTaskCost = cost;
-					primaryIndex = index;
-					primaryBracelet = bracelet;
+					bestOfferCost = cost;
+					bestOfferBracelet = bracelet;
 				}
+			}
+			taskCosts[index] = bestOfferCost;
+			taskBracelets[index] = bestOfferBracelet;
+			double preferenceAdjustedCost = taskPreference.apply(currentOffers.get(index).getTask())
+				== TaskPreference.PREFER ? bestOfferCost * 0.90 : bestOfferCost;
+			if (preferenceAdjustedCost < bestTaskCost)
+				{
+					bestTaskCost = preferenceAdjustedCost;
+					primaryIndex = index;
+					primaryBracelet = bestOfferBracelet;
+				}
+		}
+		double actualBestTaskCost = taskCosts[primaryIndex];
+		int alwaysIndex = -1;
+		for (int index = 0; index < currentOffers.size(); index++)
+		{
+			if (taskPreference.apply(currentOffers.get(index).getTask()) == TaskPreference.ALWAYS
+				&& (alwaysIndex < 0 || taskCosts[index] < taskCosts[alwaysIndex]))
+			{
+				alwaysIndex = index;
 			}
 		}
 
 		double probabilityBetter = samples.stream()
 			.filter(sample -> sample.bestOnRateHours < currentBestOnRate).count() / (double) samples.size();
 		RoutingDecision.Type type = RoutingDecision.Type.HUNT;
-		double expectedHours = bestTaskCost;
+		double expectedHours = actualBestTaskCost;
 		if (allOutsideTarget && pointSkipAvailable
 			&& fastestExpeditiousHours >= POINT_SKIP_MIN_FASTEST_TASK_HOURS
-			&& pointSkipCost < bestTaskCost)
+			&& pointSkipCost < actualBestTaskCost)
 		{
 			type = RoutingDecision.Type.POINT_SKIP;
 			expectedHours = pointSkipCost;
@@ -104,13 +141,22 @@ final class OptimalRoutingCalculator
 			expectedHours = outcome(withBracelet(currentOffers.get(primaryIndex), primaryBracelet),
 				eliteCombatAchievements).costWithContinuation(retainedPointFuture, slayerCape);
 		}
+		if (alwaysIndex >= 0)
+		{
+			type = RoutingDecision.Type.HUNT;
+			primaryIndex = alwaysIndex;
+			primaryBracelet = BraceletAdvisor.recommend(currentOffers.get(alwaysIndex), eliteCombatAchievements);
+			expectedHours = outcome(withBracelet(currentOffers.get(alwaysIndex), primaryBracelet),
+				eliteCombatAchievements).costWithContinuation(retainedPointFuture, slayerCape);
+		}
 
 		return new RoutingDecision(type, primaryIndex, bestHeartIndex, fastestFallbackIndex,
 			primaryBracelet, expectedHours, noPointFuture, probabilityBetter);
 	}
 
 	private static List<FutureSet> sampleFutureSets(boolean eliteCombatAchievements, int slayerLevel,
-		int choiceCount, Set<String> blockedTasks, ToDoubleFunction<HeartTask> killsPerHour)
+		int choiceCount, Set<String> blockedTasks, ToDoubleFunction<HeartTask> killsPerHour,
+		ToDoubleBiFunction<HeartTask, Integer> overheadHours)
 	{
 		List<MortimerRoutingData.Profile> eligible = MortimerRoutingData.eligibleProfiles(slayerLevel, blockedTasks);
 		if (eligible.size() < choiceCount)
@@ -143,7 +189,8 @@ final class OptimalRoutingCalculator
 				for (SuperiorOption superior : task.getSuperiors())
 				{
 					double kph = superior.effectiveKillsPerHour(taskKph);
-					OfferState base = new OfferState(task, superior, amount, modifier, kph, Bracelet.NONE);
+					OfferState base = new OfferState(task, superior, amount, modifier, 0.0, kph,
+						overheadHours.applyAsDouble(task, amount), Bracelet.NONE);
 					bestOnRate = Math.min(bestOnRate,
 						HeartCalculator.calculate(base, eliteCombatAchievements).getHoursOnRate());
 					for (Bracelet bracelet : Bracelet.values())
@@ -210,13 +257,14 @@ final class OptimalRoutingCalculator
 		}
 		double successPerKill = 1.0 / result.getHeartPerKill();
 		double expectedKillsBeforeExit = (1.0 - failureChance) / successPerKill;
-		return new TaskOutcome(expectedKillsBeforeExit / Math.max(1.0, offer.getKillsPerHour()), failureChance);
+		return new TaskOutcome(offer.getOverheadHours()
+			+ expectedKillsBeforeExit / Math.max(1.0, offer.getKillsPerHour()), failureChance);
 	}
 
 	private static OfferState withBracelet(OfferState offer, Bracelet bracelet)
 	{
 		return new OfferState(offer.getTask(), offer.getSuperior(), offer.getAmount(), offer.getDropModifier(),
-			offer.getXpModifier(), offer.getKillsPerHour(), bracelet);
+			offer.getXpModifier(), offer.getKillsPerHour(), offer.getOverheadHours(), bracelet);
 	}
 
 	private static MortimerRoutingData.Profile removeWeighted(Random random, List<MortimerRoutingData.Profile> pool)

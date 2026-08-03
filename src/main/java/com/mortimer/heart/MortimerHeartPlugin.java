@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.regex.Matcher;
@@ -99,6 +100,8 @@ public class MortimerHeartPlugin extends Plugin
 	private int measurementStartRemaining = -1;
 	private long measurementStartedAt;
 	private String loadedRsProfileKey = "";
+	private PersonalPaceTask personalPaceEditorTask;
+	private boolean updatingPersonalPaceEditor;
 
 	@Override
 	protected void startUp()
@@ -108,6 +111,8 @@ public class MortimerHeartPlugin extends Plugin
 		grindRecords = LocalGrindCodec.decode(config.localGrindData());
 		activeTask = ActiveMortimerTaskCodec.decode(config.activeTaskData());
 		blockedTasks = BlockedTaskCodec.decode(config.blockedTasksData());
+		personalPaceEditorTask = config.personalPaceTask();
+		loadPersonalPaceEditor();
 		overlayManager.add(recommendationOverlay);
 		overlayManager.add(braceletReminderOverlay);
 		SwingUtilities.invokeLater(() ->
@@ -159,6 +164,17 @@ public class MortimerHeartPlugin extends Plugin
 			return;
 		}
 		ActiveMortimerTask completed = activeTask;
+		HeartTask completedTask = HeartData.findTask(completed.getTaskName());
+		if (completedTask != null && completed.getTaskName().equals(measurementTaskName))
+		{
+			String learned = performance.recordLearnedPace(completedTask,
+				(int) Math.round(detectedBracelet.adjustKills(Math.max(0, measurementStartRemaining))),
+				Math.max(0L, System.currentTimeMillis() - measurementStartedAt));
+			if (client.getGameState() == GameState.LOGGED_IN)
+			{
+				configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "learnedPaceData", learned);
+			}
+		}
 		lastCompletedTask = completed;
 		grindRecords.add(completed.toRecord());
 		activeTask = null;
@@ -418,19 +434,41 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			SwingUtilities.invokeLater(() -> panel.setShowMonsterVariants(config.showMonsterVariants()));
 		}
+		if ("personalPaceTask".equals(event.getKey()))
+		{
+			personalPaceEditorTask = config.personalPaceTask();
+			loadPersonalPaceEditor();
+		}
+		else if ("personalKillsPerHour".equals(event.getKey())
+			|| "personalTravelSeconds".equals(event.getKey())
+			|| "personalTaskPreference".equals(event.getKey()))
+		{
+			savePersonalPaceEditor();
+		}
+		boolean paceChanged = "paceMode".equals(event.getKey())
+			|| "preparationSeconds".equals(event.getKey())
+			|| "personalPaceData".equals(event.getKey())
+			|| "learnedPaceData".equals(event.getKey());
+		if (paceChanged && panel != null)
+		{
+			lastRecommendationSignature = "";
+			SwingUtilities.invokeLater(panel::refreshCalculations);
+			clientThread.invokeLater(this::scanMortimerScreen);
+		}
 		if ("preferredGrind".equals(event.getKey()) && panel != null)
 		{
 			SwingUtilities.invokeLater(() -> panel.setGrindPreference(config.preferredGrind()));
 		}
 		boolean manualBlockChanged = "manualBlockedTaskOne".equals(event.getKey())
 			|| "manualBlockedTaskTwo".equals(event.getKey());
-		if (manualBlockChanged)
+		boolean pointReserveChanged = "slayerPointReserve".equals(event.getKey());
+		if (manualBlockChanged || pointReserveChanged)
 		{
 			lastRecommendationSignature = "";
 			updatePanelRoutingContext();
 		}
 		if ("showMonsterVariants".equals(event.getKey()) || "preferredGrind".equals(event.getKey())
-			|| manualBlockChanged)
+			|| manualBlockChanged || pointReserveChanged)
 		{
 			clientThread.invokeLater(this::scanMortimerScreen);
 		}
@@ -438,6 +476,66 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			clientThread.invokeLater(this::refreshBraceletReminder);
 		}
+	}
+
+	private void loadPersonalPaceEditor()
+	{
+		if (updatingPersonalPaceEditor || personalPaceEditorTask == null)
+		{
+			return;
+		}
+		TaskPaceProfile profile = TaskPaceProfileCodec.decode(config.personalPaceData())
+			.getOrDefault(personalPaceEditorTask.getTaskName(), TaskPaceProfile.DEFAULT);
+		updatingPersonalPaceEditor = true;
+		try
+		{
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "personalKillsPerHour",
+				profile.getManualKillsPerHour());
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "personalTravelSeconds",
+				profile.getTravelSeconds());
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "personalTaskPreference",
+				profile.getPreference());
+		}
+		finally
+		{
+			updatingPersonalPaceEditor = false;
+		}
+	}
+
+	private void savePersonalPaceEditor()
+	{
+		if (updatingPersonalPaceEditor || personalPaceEditorTask == null
+			|| config.personalPaceTask() != personalPaceEditorTask)
+		{
+			return;
+		}
+		double kph = Math.max(0.0, Math.min(5_000.0, config.personalKillsPerHour()));
+		int travel = Math.max(0, Math.min(3_600, config.personalTravelSeconds()));
+		TaskPaceProfile profile = new TaskPaceProfile(kph, travel, config.personalTaskPreference());
+		Map<String, TaskPaceProfile> profiles = TaskPaceProfileCodec.decode(config.personalPaceData());
+		if (profile.isDefault())
+		{
+			profiles.remove(personalPaceEditorTask.getTaskName());
+		}
+		else
+		{
+			profiles.put(personalPaceEditorTask.getTaskName(), profile);
+		}
+		String encoded = TaskPaceProfileCodec.encode(profiles);
+		if (!encoded.equals(config.personalPaceData()))
+		{
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "personalPaceData", encoded);
+			if (client.getGameState() == GameState.LOGGED_IN)
+			{
+				configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "personalPaceData", encoded);
+			}
+		}
+		lastRecommendationSignature = "";
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(panel::refreshCalculations);
+		}
+		clientThread.invokeLater(this::scanMortimerScreen);
 	}
 
 	private void saveBlockedTasks()
@@ -474,17 +572,20 @@ public class MortimerHeartPlugin extends Plugin
 			.map(MortimerOfferPlacement::getOffer).collect(Collectors.toList());
 		Set<String> effectiveBlocks = effectiveBlockedTasks();
 		String recommendationSignature = config.preferredGrind() + ":" + config.showMonsterVariants()
-			+ ":" + eliteCa + ":" + slayerLevel + ":" + slayerPoints + ":" + slayerCape
+			+ ":" + eliteCa + ":" + slayerLevel + ":" + spendableSlayerPoints() + ":" + slayerCape
 			+ ":" + BlockedTaskCodec.encode(effectiveBlocks) + ":"
 			+ offers.stream().map(offer -> offer.getTask().getName() + ':' + offer.getAmount()
 				+ ':' + offer.getDropModifier() + ':' + offer.getXpModifier()
-				+ ':' + performance.killsPerHour(offer.getTask())).collect(Collectors.joining("|"));
+				+ ':' + performance.killsPerHour(offer.getTask())
+				+ ':' + performance.overheadHours(offer.getTask())
+				+ ':' + performance.preference(offer.getTask())).collect(Collectors.joining("|"));
 		if (!recommendationSignature.equals(lastRecommendationSignature))
 		{
 			lastRecommendationSignature = recommendationSignature;
 			lastRecommendation = MortimerOverlayRecommendationCalculator.calculate(
 				offers, config.showMonsterVariants(), config.preferredGrind(), eliteCa,
-				slayerLevel, slayerPoints, effectiveBlocks, slayerCape, performance::killsPerHour);
+				slayerLevel, spendableSlayerPoints(), effectiveBlocks, slayerCape, performance::killsPerHour,
+				(task, amount) -> performance.overheadHours(task), performance::preference);
 		}
 		recommendationOverlay.show(placements, lastRecommendation);
 		if (!offers.isEmpty())
@@ -583,7 +684,8 @@ public class MortimerHeartPlugin extends Plugin
 		SuperiorOption superior = findSuperior(heartTask, task.getSuperiorName());
 		double kph = superior.effectiveKillsPerHour(performance.killsPerHour(heartTask));
 		return new OfferState(heartTask, superior, task.getAssignedAmount(),
-			Math.max(0.0, task.getDropModifier()), kph, Bracelet.NONE);
+			Math.max(0.0, task.getDropModifier()), 0.0, kph,
+			performance.overheadHours(heartTask), Bracelet.NONE);
 	}
 
 	private static SuperiorOption findSuperior(HeartTask task, String name)
@@ -631,7 +733,7 @@ public class MortimerHeartPlugin extends Plugin
 			{
 				if (panel != null)
 				{
-					panel.setRoutingContext(slayerLevel, slayerPoints, slayerCape, snapshot);
+					panel.setRoutingContext(slayerLevel, spendableSlayerPoints(), slayerCape, snapshot);
 				}
 			});
 		}
@@ -643,6 +745,11 @@ public class MortimerHeartPlugin extends Plugin
 		addManualBlock(effective, config.manualBlockedTaskOne());
 		addManualBlock(effective, config.manualBlockedTaskTwo());
 		return effective;
+	}
+
+	private int spendableSlayerPoints()
+	{
+		return Math.max(0, slayerPoints - Math.max(0, config.slayerPointReserve()));
 	}
 
 	private static void addManualBlock(Set<String> tasks, ManualBlockedTask manualBlock)
@@ -702,7 +809,7 @@ public class MortimerHeartPlugin extends Plugin
 			int displayRemaining = current != null && current.getName().equals(displayName) ? remaining : displayAssigned;
 			updateTaskMeasurement(displayName, displayRemaining);
 			double actualDps = current == null || !current.getName().equals(displayName) ? 0.0 : performance.measuredDps(current,
-				Math.max(0, measurementStartRemaining - displayRemaining),
+				detectedBracelet.adjustKills(Math.max(0, measurementStartRemaining - displayRemaining)),
 				Math.max(0L, System.currentTimeMillis() - measurementStartedAt));
 			ActiveMortimerTask taskSnapshot = activeTask;
 			SwingUtilities.invokeLater(() ->
@@ -874,6 +981,8 @@ public class MortimerHeartPlugin extends Plugin
 		String remoteGrind = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "localGrindData");
 		String remoteActive = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "activeTaskData");
 		String remoteBlocks = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "blockedTasksData");
+		String remotePersonalPace = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "personalPaceData");
+		String remoteLearnedPace = configManager.getRSProfileConfiguration(MortimerHeartConfig.GROUP, "learnedPaceData");
 		if (remoteGrind == null || remoteGrind.trim().isEmpty())
 		{
 			saveGrindRecords();
@@ -902,6 +1011,25 @@ public class MortimerHeartPlugin extends Plugin
 			blockedTasks = BlockedTaskCodec.decode(remoteBlocks);
 			configManager.setConfiguration(MortimerHeartConfig.GROUP, "blockedTasksData", remoteBlocks);
 		}
+		if (remotePersonalPace == null || remotePersonalPace.trim().isEmpty())
+		{
+			configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "personalPaceData",
+				config.personalPaceData());
+		}
+		else
+		{
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "personalPaceData", remotePersonalPace);
+		}
+		if (remoteLearnedPace == null || remoteLearnedPace.trim().isEmpty())
+		{
+			configManager.setRSProfileConfiguration(MortimerHeartConfig.GROUP, "learnedPaceData",
+				config.learnedPaceData());
+		}
+		else
+		{
+			configManager.setConfiguration(MortimerHeartConfig.GROUP, "learnedPaceData", remoteLearnedPace);
+		}
+		loadPersonalPaceEditor();
 		if (panel != null)
 		{
 			GrindSummary summary = GrindSummary.from(grindRecords);
@@ -914,7 +1042,7 @@ public class MortimerHeartPlugin extends Plugin
 					panel.setGrindSummary(summary);
 					panel.setActiveTask(taskSnapshot, taskSnapshot == null ? 0
 						: remaining > 0 ? remaining : taskSnapshot.getAssignedAmount());
-					panel.setRoutingContext(slayerLevel, slayerPoints, slayerCape, effectiveBlockedTasks());
+					panel.setRoutingContext(slayerLevel, spendableSlayerPoints(), slayerCape, effectiveBlockedTasks());
 				}
 			});
 		}
@@ -1039,7 +1167,7 @@ public class MortimerHeartPlugin extends Plugin
 			{
 				panel.setClientSnapshot(attack, strength, ranged, magic, equippedCount);
 				panel.setDetectedBracelet(detectedBracelet);
-				panel.setRoutingContext(slayerLevel, slayerPoints, slayerCape, effectiveBlockedTasks());
+				panel.setRoutingContext(slayerLevel, spendableSlayerPoints(), slayerCape, effectiveBlockedTasks());
 			}
 		});
 		refreshBraceletReminder();

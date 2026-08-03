@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.function.ToDoubleBiFunction;
 import java.util.function.ToDoubleFunction;
 
 final class MortimerOverlayRecommendationCalculator
@@ -18,13 +20,26 @@ final class MortimerOverlayRecommendationCalculator
 		int slayerLevel, int slayerPoints, ToDoubleFunction<HeartTask> killsPerHour)
 	{
 		return calculate(detectedOffers, showMonsterVariants, preference, eliteCombatAchievements,
-			slayerLevel, slayerPoints, Collections.emptySet(), false, killsPerHour);
+			slayerLevel, slayerPoints, Collections.emptySet(), false, killsPerHour,
+			(task, amount) -> 0.0, task -> TaskPreference.STANDARD);
 	}
 
 	static MortimerOverlayRecommendation calculate(List<MortimerDetectedOffer> detectedOffers,
 		boolean showMonsterVariants, GrindPreference preference, boolean eliteCombatAchievements,
 		int slayerLevel, int slayerPoints, Set<String> blockedTasks, boolean slayerCape,
 		ToDoubleFunction<HeartTask> killsPerHour)
+	{
+		return calculate(detectedOffers, showMonsterVariants, preference, eliteCombatAchievements,
+			slayerLevel, slayerPoints, blockedTasks, slayerCape, killsPerHour,
+			(task, amount) -> 0.0, task -> TaskPreference.STANDARD);
+	}
+
+	static MortimerOverlayRecommendation calculate(List<MortimerDetectedOffer> detectedOffers,
+		boolean showMonsterVariants, GrindPreference preference, boolean eliteCombatAchievements,
+		int slayerLevel, int slayerPoints, Set<String> blockedTasks, boolean slayerCape,
+		ToDoubleFunction<HeartTask> killsPerHour,
+		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
+		Function<HeartTask, TaskPreference> taskPreference)
 	{
 		if (detectedOffers.isEmpty())
 		{
@@ -45,7 +60,8 @@ final class MortimerOverlayRecommendationCalculator
 					Math.max(1.0, killsPerHour.applyAsDouble(detected.getTask())));
 				offers.add(new OfferState(detected.getTask(), superior, detected.getAmount(),
 					detected.getDropModifier(), detected.getXpModifier(),
-					effectiveKph, Bracelet.NONE));
+					effectiveKph, overheadHours.applyAsDouble(detected.getTask(), detected.getAmount()),
+					Bracelet.NONE));
 				sourceOfferIndexes.add(offerIndex);
 			}
 		}
@@ -53,10 +69,18 @@ final class MortimerOverlayRecommendationCalculator
 		if (preference != GrindPreference.IMBUED_HEART)
 		{
 			int best = PreferenceRecommendationCalculator.bestIndex(
-				offers, eliteCombatAchievements, preference);
+				offers, eliteCombatAchievements, preference, taskPreference);
 			if (best < 0)
 			{
 				return null;
+			}
+			TaskPreference personal = taskPreference.apply(offers.get(best).getTask());
+			if (personal != TaskPreference.STANDARD)
+			{
+				return new MortimerOverlayRecommendation(sourceOfferIndexes.get(best),
+					preference == GrindPreference.SLAYER_XP
+						? MortimerOverlayRecommendation.Style.SLAYER_XP : MortimerOverlayRecommendation.Style.BALANCED,
+					personal == TaskPreference.ALWAYS ? "PERSONAL PICK · ALWAYS" : "PERSONAL PICK · PREFERRED");
 			}
 			return preference == GrindPreference.SLAYER_XP
 				? new MortimerOverlayRecommendation(sourceOfferIndexes.get(best),
@@ -66,7 +90,8 @@ final class MortimerOverlayRecommendationCalculator
 		}
 
 		RoutingDecision decision = OptimalRoutingCalculator.calculate(offers, eliteCombatAchievements,
-			slayerLevel, slayerPoints, detectedOffers.size(), blockedTasks, slayerCape, killsPerHour);
+			slayerLevel, slayerPoints, detectedOffers.size(), blockedTasks, slayerCape, killsPerHour,
+			overheadHours, taskPreference);
 		if (decision == null)
 		{
 			return null;
@@ -86,10 +111,17 @@ final class MortimerOverlayRecommendationCalculator
 				MortimerOverlayRecommendation.Style.FAST_REROLL, label);
 		}
 		OfferState primary = offers.get(decision.getPrimaryIndex());
+		TaskPreference personal = taskPreference.apply(primary.getTask());
+		if (personal != TaskPreference.STANDARD)
+		{
+			return new MortimerOverlayRecommendation(sourceOfferIndexes.get(decision.getPrimaryIndex()),
+				MortimerOverlayRecommendation.Style.HEART,
+				personal == TaskPreference.ALWAYS ? "PERSONAL PICK · ALWAYS" : "PERSONAL PICK · PREFERRED");
+		}
 		String bracelet = decision.getBracelet() == Bracelet.NONE
 			? "" : " · " + decision.getBracelet().toString().toUpperCase(Locale.ROOT);
 		String heartLabel = primary.getTask().getSuperiors().size() > 1
-			? primary.getSuperior().getMonsterName().toUpperCase(Locale.ROOT) + bracelet
+			? primary.getSuperior().taskDisplayName(primary.getTask()).toUpperCase(Locale.ROOT) + bracelet
 			: "BEST HEART" + bracelet;
 		return new MortimerOverlayRecommendation(sourceOfferIndexes.get(decision.getPrimaryIndex()),
 			MortimerOverlayRecommendation.Style.HEART, heartLabel);

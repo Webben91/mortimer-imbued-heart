@@ -42,6 +42,36 @@ public class PreferenceRecommendationCalculatorTest
 			offers, true, GrindPreference.BALANCED));
 	}
 
+	@Test
+	public void alwaysPreferenceOverridesTheNumericalLeader()
+	{
+		List<OfferState> offers = Arrays.asList(
+			offer("Smoke devils", 800, 0),
+			offer("Venators", 100, 0));
+
+		assertEquals(1, PreferenceRecommendationCalculator.bestIndex(offers, true,
+			GrindPreference.SLAYER_XP,
+			task -> task.getName().equals("Venators") ? TaskPreference.ALWAYS : TaskPreference.STANDARD));
+	}
+
+	@Test
+	public void preferredTaskOnlyOverridesWhenCompetitive()
+	{
+		List<OfferState> competitive = Arrays.asList(
+			offer("Smoke devils", 230, 0),
+			offer("Venators", 100, 0));
+		List<OfferState> weak = Arrays.asList(
+			offer("Smoke devils", 800, 0),
+			offer("Venators", 100, 0));
+
+		assertEquals(1, PreferenceRecommendationCalculator.bestIndex(competitive, true,
+			GrindPreference.SLAYER_XP,
+			task -> task.getName().equals("Venators") ? TaskPreference.PREFER : TaskPreference.STANDARD));
+		assertEquals(0, PreferenceRecommendationCalculator.bestIndex(weak, true,
+			GrindPreference.SLAYER_XP,
+			task -> task.getName().equals("Venators") ? TaskPreference.PREFER : TaskPreference.STANDARD));
+	}
+
 	private static OfferState offer(String taskName, double kph, double xpModifier)
 	{
 		HeartTask task = HeartData.findTask(taskName);
