@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.ToDoubleBiFunction;
 import java.util.function.ToDoubleFunction;
@@ -43,6 +44,19 @@ final class MortimerOverlayRecommendationCalculator
 		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
 		Function<HeartTask, TaskPreference> taskPreference)
 	{
+		return calculate(detectedOffers, showMonsterVariants, preference, eliteCombatAchievements,
+			slayerLevel, slayerPoints, blockedTasks, slayerCape, killsPerHour, overheadHours,
+			taskPreference, (task, superior) -> false);
+	}
+
+	static MortimerOverlayRecommendation calculate(List<MortimerDetectedOffer> detectedOffers,
+		boolean showMonsterVariants, GrindPreference preference, boolean eliteCombatAchievements,
+		int slayerLevel, int slayerPoints, Set<String> blockedTasks, boolean slayerCape,
+		TaskKillsPerHourProvider killsPerHour,
+		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
+		Function<HeartTask, TaskPreference> taskPreference,
+		BiPredicate<HeartTask, SuperiorOption> wildernessTask)
+	{
 		if (detectedOffers.isEmpty())
 		{
 			return null;
@@ -53,9 +67,7 @@ final class MortimerOverlayRecommendationCalculator
 		for (int offerIndex = 0; offerIndex < detectedOffers.size(); offerIndex++)
 		{
 			MortimerDetectedOffer detected = detectedOffers.get(offerIndex);
-			List<SuperiorOption> variants = showMonsterVariants
-				? detected.getTask().getSuperiors()
-				: detected.getTask().getSuperiors().subList(0, 1);
+			List<SuperiorOption> variants = variantsFor(detected.getTask(), showMonsterVariants, wildernessTask);
 			for (SuperiorOption superior : variants)
 			{
 				double effectiveKph = Math.max(1.0,
@@ -63,7 +75,7 @@ final class MortimerOverlayRecommendationCalculator
 				offers.add(new OfferState(detected.getTask(), superior, detected.getAmount(),
 					detected.getDropModifier(), detected.getXpModifier(),
 					effectiveKph, overheadHours.applyAsDouble(detected.getTask(), detected.getAmount()),
-					Bracelet.NONE));
+					Bracelet.NONE, wildernessTask.test(detected.getTask(), superior)));
 				sourceOfferIndexes.add(offerIndex);
 			}
 		}
@@ -93,7 +105,7 @@ final class MortimerOverlayRecommendationCalculator
 
 		RoutingDecision decision = OptimalRoutingCalculator.calculate(offers, eliteCombatAchievements,
 			slayerLevel, slayerPoints, detectedOffers.size(), blockedTasks, slayerCape, killsPerHour,
-			overheadHours, taskPreference);
+			overheadHours, taskPreference, wildernessTask);
 		if (decision == null)
 		{
 			return null;
@@ -127,5 +139,22 @@ final class MortimerOverlayRecommendationCalculator
 			: "BEST HEART" + bracelet;
 		return new MortimerOverlayRecommendation(sourceOfferIndexes.get(decision.getPrimaryIndex()),
 			MortimerOverlayRecommendation.Style.HEART, heartLabel);
+	}
+
+	private static List<SuperiorOption> variantsFor(HeartTask task, boolean showMonsterVariants,
+		BiPredicate<HeartTask, SuperiorOption> wildernessTask)
+	{
+		if (showMonsterVariants)
+		{
+			return task.getSuperiors();
+		}
+		for (SuperiorOption superior : task.getSuperiors())
+		{
+			if (wildernessTask.test(task, superior))
+			{
+				return Collections.singletonList(superior);
+			}
+		}
+		return task.getSuperiors().subList(0, 1);
 	}
 }

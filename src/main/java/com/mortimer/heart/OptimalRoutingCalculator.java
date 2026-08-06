@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.Collections;
 import java.util.Set;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.ToDoubleBiFunction;
 import java.util.function.ToDoubleFunction;
@@ -49,6 +50,18 @@ final class OptimalRoutingCalculator
 		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
 		Function<HeartTask, TaskPreference> taskPreference)
 	{
+		return calculate(currentOffers, eliteCombatAchievements, slayerLevel, slayerPoints,
+			futureChoiceCount, blockedTasks, slayerCape, killsPerHour, overheadHours,
+			taskPreference, (task, superior) -> false);
+	}
+
+	static RoutingDecision calculate(List<OfferState> currentOffers, boolean eliteCombatAchievements,
+		int slayerLevel, int slayerPoints, int futureChoiceCount, Set<String> blockedTasks,
+		boolean slayerCape, TaskKillsPerHourProvider killsPerHour,
+		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
+		Function<HeartTask, TaskPreference> taskPreference,
+		BiPredicate<HeartTask, SuperiorOption> wildernessTask)
+	{
 		if (currentOffers.isEmpty())
 		{
 			return null;
@@ -71,7 +84,8 @@ final class OptimalRoutingCalculator
 			eliteCombatAchievements).getTaskHours();
 
 		List<FutureSet> samples = sampleFutureSets(eliteCombatAchievements, slayerLevel,
-			Math.max(2, Math.min(3, futureChoiceCount)), blockedTasks, killsPerHour, overheadHours);
+			Math.max(2, Math.min(3, futureChoiceCount)), blockedTasks, killsPerHour, overheadHours,
+			wildernessTask);
 		double noPointFuture = solveFutureValue(samples, Double.POSITIVE_INFINITY, slayerCape);
 		boolean pointSkipAvailable = slayerPoints >= 100;
 		double pointSkipCost = POINT_SKIP_HOURS + noPointFuture;
@@ -160,7 +174,8 @@ final class OptimalRoutingCalculator
 
 	private static List<FutureSet> sampleFutureSets(boolean eliteCombatAchievements, int slayerLevel,
 		int choiceCount, Set<String> blockedTasks, TaskKillsPerHourProvider killsPerHour,
-		ToDoubleBiFunction<HeartTask, Integer> overheadHours)
+		ToDoubleBiFunction<HeartTask, Integer> overheadHours,
+		BiPredicate<HeartTask, SuperiorOption> wildernessTask)
 	{
 		List<MortimerRoutingData.Profile> eligible = MortimerRoutingData.eligibleProfiles(slayerLevel, blockedTasks);
 		if (eligible.size() < choiceCount)
@@ -193,7 +208,8 @@ final class OptimalRoutingCalculator
 				{
 					double kph = Math.max(1.0, killsPerHour.applyAsDouble(task, superior));
 					OfferState base = new OfferState(task, superior, amount, modifier, 0.0, kph,
-						overheadHours.applyAsDouble(task, amount), Bracelet.NONE);
+						overheadHours.applyAsDouble(task, amount), Bracelet.NONE,
+						wildernessTask.test(task, superior));
 					bestOnRate = Math.min(bestOnRate,
 						HeartCalculator.calculate(base, eliteCombatAchievements).getHoursOnRate());
 					for (Bracelet bracelet : Bracelet.values())
@@ -267,7 +283,8 @@ final class OptimalRoutingCalculator
 	private static OfferState withBracelet(OfferState offer, Bracelet bracelet)
 	{
 		return new OfferState(offer.getTask(), offer.getSuperior(), offer.getAmount(), offer.getDropModifier(),
-			offer.getXpModifier(), offer.getKillsPerHour(), offer.getOverheadHours(), bracelet);
+			offer.getXpModifier(), offer.getKillsPerHour(), offer.getOverheadHours(), bracelet,
+			offer.isWilderness());
 	}
 
 	private static MortimerRoutingData.Profile removeWeighted(Random random, List<MortimerRoutingData.Profile> pool)

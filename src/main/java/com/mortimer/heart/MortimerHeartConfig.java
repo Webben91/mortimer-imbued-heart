@@ -220,6 +220,18 @@ public interface MortimerHeartConfig extends Config
 		return CannonSetup.OFF;
 	}
 
+	@ConfigItem(
+		keyName = "abyssalDemonsWilderness",
+		name = "Enable Wilderness Tasks",
+		description = "Apply the Wilderness superior bonus: 1/180, or 1/135 with Elite Combat Achievements",
+		section = abyssalDemonsSection,
+		position = 2
+	)
+	default boolean abyssalDemonsWilderness()
+	{
+		return false;
+	}
+
 	@ConfigSection(
 		name = "Aquanites",
 		description = "DPS and cannon settings for Aquanites",
@@ -636,6 +648,18 @@ public interface MortimerHeartConfig extends Config
 		return CannonSetup.OFF;
 	}
 
+	@ConfigItem(
+		keyName = "dustDevilsWilderness",
+		name = "Enable Wilderness Tasks",
+		description = "Apply the Wilderness superior bonus: 1/180, or 1/135 with Elite Combat Achievements",
+		section = dustDevilsSection,
+		position = 2
+	)
+	default boolean dustDevilsWilderness()
+	{
+		return false;
+	}
+
 	@ConfigSection(
 		name = "Gargoyles",
 		description = "DPS and cannon settings for Gargoyles",
@@ -796,6 +820,18 @@ public interface MortimerHeartConfig extends Config
 		return CannonSetup.OFF;
 	}
 
+	@ConfigItem(
+		keyName = "jelliesWilderness",
+		name = "Enable Wilderness Tasks",
+		description = "Apply the Wilderness superior bonus to regular Jellies: 1/180, or 1/135 with Elite Combat Achievements",
+		section = jelliesSection,
+		position = 2
+	)
+	default boolean jelliesWilderness()
+	{
+		return false;
+	}
+
 	@ConfigSection(
 		name = "Kurask",
 		description = "DPS and cannon settings for Kurask",
@@ -858,6 +894,18 @@ public interface MortimerHeartConfig extends Config
 	default CannonSetup nechryaelCannon()
 	{
 		return CannonSetup.OFF;
+	}
+
+	@ConfigItem(
+		keyName = "nechryaelWilderness",
+		name = "Enable Wilderness Tasks",
+		description = "Apply the Wilderness superior bonus to Greater Nechryael: 1/180, or 1/135 with Elite Combat Achievements",
+		section = nechryaelSection,
+		position = 2
+	)
+	default boolean nechryaelWilderness()
+	{
+		return false;
 	}
 
 	@ConfigSection(

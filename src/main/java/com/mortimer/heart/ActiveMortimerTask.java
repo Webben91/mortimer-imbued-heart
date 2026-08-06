@@ -48,6 +48,18 @@ final class ActiveMortimerTask
 			dropModifier, superiorSpawnRate, superiorRolls);
 	}
 
+	ActiveMortimerTask withSuperior(SuperiorOption superior, double newSuperiorSpawnRate)
+	{
+		return new ActiveMortimerTask(taskName, superior.getName(), assignedAmount, superior.getHeartRate(),
+			dropModifier, newSuperiorSpawnRate, superiorRolls);
+	}
+
+	ActiveMortimerTask withSuperiorSpawnRate(double newSuperiorSpawnRate)
+	{
+		return new ActiveMortimerTask(taskName, superiorName, assignedAmount, baseHeartRate,
+			dropModifier, newSuperiorSpawnRate, superiorRolls);
+	}
+
 	ActiveMortimerTask withAssignedAmount(int amount)
 	{
 		return new ActiveMortimerTask(taskName, superiorName, Math.max(1, amount), baseHeartRate,

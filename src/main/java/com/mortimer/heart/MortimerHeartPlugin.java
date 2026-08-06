@@ -117,7 +117,8 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			panel = new MortimerHeartPanel(false, config.showMonsterVariants(), config.preferredGrind(),
 				this::undoLastGrindRecord,
-				performance, this::selectActiveVariant, this::setActiveModifier);
+				performance, this::selectActiveVariant, this::setActiveModifier,
+				this::isWildernessEnabled);
 			panel.setGrindSummary(GrindSummary.from(grindRecords));
 			navigationButton = NavigationButton.builder()
 				.tooltip("Mortimer Slayer")
@@ -482,6 +483,16 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			clientThread.invokeLater(this::refreshBraceletReminder);
 		}
+		if (event.getKey().endsWith("Wilderness"))
+		{
+			lastRecommendationSignature = "";
+			refreshActiveTaskSuperiorRate();
+			if (panel != null)
+			{
+				SwingUtilities.invokeLater(panel::refreshCalculations);
+			}
+			clientThread.invokeLater(this::scanMortimerScreen);
+		}
 	}
 
 	private void loadPersonalPaceEditor()
@@ -579,7 +590,7 @@ public class MortimerHeartPlugin extends Plugin
 		Set<String> effectiveBlocks = effectiveBlockedTasks();
 		String recommendationSignature = config.preferredGrind() + ":" + config.showMonsterVariants()
 			+ ":" + eliteCa + ":" + slayerLevel + ":" + spendableSlayerPoints() + ":" + slayerCape
-			+ ":" + BlockedTaskCodec.encode(effectiveBlocks) + ":"
+			+ ":" + BlockedTaskCodec.encode(effectiveBlocks) + ":" + wildernessSignature() + ":"
 			+ offers.stream().map(offer -> offer.getTask().getName() + ':' + offer.getAmount()
 				+ ':' + offer.getDropModifier() + ':' + offer.getXpModifier()
 				+ ':' + performance.killsPerHour(offer.getTask())
@@ -591,7 +602,8 @@ public class MortimerHeartPlugin extends Plugin
 			lastRecommendation = MortimerOverlayRecommendationCalculator.calculate(
 				offers, config.showMonsterVariants(), config.preferredGrind(), eliteCa,
 				slayerLevel, spendableSlayerPoints(), effectiveBlocks, slayerCape, performance::killsPerHour,
-				(task, amount) -> performance.overheadHours(task), performance::preference);
+				(task, amount) -> performance.overheadHours(task), performance::preference,
+				this::isWildernessEnabled);
 		}
 		recommendationOverlay.show(placements, lastRecommendation);
 		if (!offers.isEmpty())
@@ -691,7 +703,70 @@ public class MortimerHeartPlugin extends Plugin
 		double kph = performance.killsPerHour(heartTask, superior);
 		return new OfferState(heartTask, superior, task.getAssignedAmount(),
 			Math.max(0.0, task.getDropModifier()), 0.0, kph,
-			performance.overheadHours(heartTask), Bracelet.NONE);
+			performance.overheadHours(heartTask), Bracelet.NONE,
+			isWildernessEnabled(heartTask, superior));
+	}
+
+	private boolean isWildernessEnabled(HeartTask task, SuperiorOption superior)
+	{
+		return WildernessTaskSettings.isEnabled(config, task, superior);
+	}
+
+	private SuperiorOption preferredSuperior(HeartTask task)
+	{
+		for (SuperiorOption superior : task.getSuperiors())
+		{
+			if (isWildernessEnabled(task, superior))
+			{
+				return superior;
+			}
+		}
+		return task.getSuperiors().get(0);
+	}
+
+	private String wildernessSignature()
+	{
+		return config.abyssalDemonsWilderness() + ":" + config.dustDevilsWilderness() + ":"
+			+ config.jelliesWilderness() + ":" + config.nechryaelWilderness();
+	}
+
+	private void refreshActiveTaskSuperiorRate()
+	{
+		if (activeTask == null)
+		{
+			return;
+		}
+		HeartTask task = HeartData.findTask(activeTask.getTaskName());
+		if (task == null)
+		{
+			return;
+		}
+		SuperiorOption superior = findSuperior(task, activeTask.getSuperiorName());
+		double spawnRate = HeartCalculator.superiorSpawnRate(eliteCa,
+			isWildernessEnabled(task, superior));
+		if (Math.abs(spawnRate - activeTask.getSuperiorSpawnRate()) < 0.0001)
+		{
+			return;
+		}
+		activeTask = activeTask.withSuperiorSpawnRate(spawnRate);
+		saveActiveTask();
+		int remaining = slayerPluginService.getRemainingAmount();
+		if (remaining <= 0)
+		{
+			remaining = profileInt("amount");
+		}
+		ActiveMortimerTask snapshot = activeTask;
+		int displayRemaining = remaining > 0 ? remaining : snapshot.getAssignedAmount();
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				if (panel != null)
+				{
+					panel.setActiveTask(snapshot, displayRemaining);
+				}
+			});
+		}
 	}
 
 	private static SuperiorOption findSuperior(HeartTask task, String name)
@@ -895,7 +970,7 @@ public class MortimerHeartPlugin extends Plugin
 
 	private ActiveMortimerTask createActiveTask(HeartTask task, int assigned, MortimerDetectedOffer selected)
 	{
-		SuperiorOption superior = task.getSuperiors().get(0);
+		SuperiorOption superior = preferredSuperior(task);
 		double modifier = selected == null ? -1.0 : selected.getDropModifier();
 		if (selected == null && lastCompletedTask != null
 			&& task.getName().equals(lastCompletedTask.getTaskName()))
@@ -912,7 +987,8 @@ public class MortimerHeartPlugin extends Plugin
 		}
 		lastCompletedTask = null;
 		return new ActiveMortimerTask(task.getName(), superior.getName(), assigned,
-			superior.getHeartRate(), modifier, eliteCa ? 150.0 : 200.0);
+			superior.getHeartRate(), modifier,
+			HeartCalculator.superiorSpawnRate(eliteCa, isWildernessEnabled(task, superior)));
 	}
 
 	private void selectActiveVariant(SuperiorOption superior)
@@ -926,7 +1002,8 @@ public class MortimerHeartPlugin extends Plugin
 		{
 			return;
 		}
-		activeTask = activeTask.withSuperior(superior);
+		activeTask = activeTask.withSuperior(superior,
+			HeartCalculator.superiorSpawnRate(eliteCa, isWildernessEnabled(task, superior)));
 		saveActiveTask();
 		refreshBraceletReminder();
 		int remaining = profileInt("amount");
@@ -1223,6 +1300,7 @@ public class MortimerHeartPlugin extends Plugin
 		}
 		eliteCa = detected;
 		lastRecommendationSignature = "";
+		refreshActiveTaskSuperiorRate();
 		refreshBraceletReminder();
 		if (panel != null)
 		{

@@ -10,7 +10,7 @@ final class HeartCalculator
 
 	static HeartResult calculate(OfferState offer, boolean eliteCombatAchievements)
 	{
-		double spawnRate = eliteCombatAchievements ? 150.0 : 200.0;
+		double spawnRate = superiorSpawnRate(eliteCombatAchievements, offer.isWilderness());
 		double modifierMultiplier = 1.0 + Math.max(0.0, offer.getDropModifier()) / 100.0;
 		double heartPerSuperior = offer.getSuperior().canDropHeart()
 			? offer.getSuperior().getHeartRate() / modifierMultiplier : Double.POSITIVE_INFINITY;
@@ -26,6 +26,12 @@ final class HeartCalculator
 			? heartPerKill / effectiveKillsPerHour : Double.POSITIVE_INFINITY;
 		return new HeartResult(offer, actualKills, heartPerSuperior, heartPerKill, taskChance,
 			chancePerHour, expectedSuperiors, taskHours, hoursOnRate);
+	}
+
+	static double superiorSpawnRate(boolean eliteCombatAchievements, boolean wilderness)
+	{
+		double baseRate = eliteCombatAchievements ? 150.0 : 200.0;
+		return wilderness ? baseRate * 0.90 : baseRate;
 	}
 
 	static double combinedChance(List<HeartResult> results)

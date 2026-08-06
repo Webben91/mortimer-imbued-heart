@@ -10,6 +10,7 @@ final class OfferState
 	private final double killsPerHour;
 	private final double overheadHours;
 	private final Bracelet bracelet;
+	private final boolean wilderness;
 
 	OfferState(HeartTask task, SuperiorOption superior, int amount, double dropModifier, double killsPerHour, Bracelet bracelet)
 	{
@@ -25,6 +26,12 @@ final class OfferState
 	OfferState(HeartTask task, SuperiorOption superior, int amount, double dropModifier, double xpModifier,
 		double killsPerHour, double overheadHours, Bracelet bracelet)
 	{
+		this(task, superior, amount, dropModifier, xpModifier, killsPerHour, overheadHours, bracelet, false);
+	}
+
+	OfferState(HeartTask task, SuperiorOption superior, int amount, double dropModifier, double xpModifier,
+		double killsPerHour, double overheadHours, Bracelet bracelet, boolean wilderness)
+	{
 		this.task = task;
 		this.superior = superior;
 		this.amount = amount;
@@ -33,6 +40,7 @@ final class OfferState
 		this.killsPerHour = killsPerHour;
 		this.overheadHours = Math.max(0.0, overheadHours);
 		this.bracelet = bracelet;
+		this.wilderness = wilderness;
 	}
 
 	HeartTask getTask()
@@ -73,5 +81,10 @@ final class OfferState
 	Bracelet getBracelet()
 	{
 		return bracelet;
+	}
+
+	boolean isWilderness()
+	{
+		return wilderness;
 	}
 }

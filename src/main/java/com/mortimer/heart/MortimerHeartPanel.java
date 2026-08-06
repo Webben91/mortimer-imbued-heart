@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import javax.swing.BorderFactory;
@@ -78,6 +79,7 @@ final class MortimerHeartPanel extends PluginPanel
 	private final TaskPerformanceService performance;
 	private final Consumer<SuperiorOption> variantSelectionAction;
 	private final Consumer<Double> modifierSelectionAction;
+	private final BiPredicate<HeartTask, SuperiorOption> wildernessTask;
 	private boolean eliteCa;
 	private Bracelet detectedBracelet = Bracelet.NONE;
 	private ActiveMortimerTask currentActiveTask;
@@ -96,7 +98,8 @@ final class MortimerHeartPanel extends PluginPanel
 	MortimerHeartPanel(boolean eliteCombatAchievements, boolean showMonsterVariants, GrindPreference grindPreference,
 		Runnable undoLastGrind,
 		TaskPerformanceService performance, Consumer<SuperiorOption> variantSelectionAction,
-		Consumer<Double> modifierSelectionAction)
+		Consumer<Double> modifierSelectionAction,
+		BiPredicate<HeartTask, SuperiorOption> wildernessTask)
 	{
 		this.eliteCa = eliteCombatAchievements;
 		this.showMonsterVariants = showMonsterVariants;
@@ -105,6 +108,7 @@ final class MortimerHeartPanel extends PluginPanel
 		this.performance = performance;
 		this.variantSelectionAction = variantSelectionAction;
 		this.modifierSelectionAction = modifierSelectionAction;
+		this.wildernessTask = wildernessTask;
 		setLayout(new BorderLayout());
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
 
@@ -404,9 +408,7 @@ final class MortimerHeartPanel extends PluginPanel
 		int position = 1;
 		for (MortimerDetectedOffer offer : detected)
 		{
-			List<SuperiorOption> variants = showMonsterVariants
-				? offer.getTask().getSuperiors()
-				: offer.getTask().getSuperiors().subList(0, 1);
+			List<SuperiorOption> variants = variantsFor(offer.getTask());
 			for (SuperiorOption superior : variants)
 			{
 				if (!offerCards.isEmpty())
@@ -483,7 +485,7 @@ final class MortimerHeartPanel extends PluginPanel
 		RoutingDecision decision = grindPreference == GrindPreference.IMBUED_HEART
 			? OptimalRoutingCalculator.calculate(routingOffers, eliteCa, slayerLevel,
 				slayerPoints, lastDetectedOffers.size(), blockedTasks, slayerCape, performance::killsPerHour,
-				(task, amount) -> performance.overheadHours(task), performance::preference)
+				(task, amount) -> performance.overheadHours(task), performance::preference, wildernessTask)
 			: null;
 		int preferenceIndex = decision == null
 			? PreferenceRecommendationCalculator.bestIndex(routingOffers, eliteCa, grindPreference,
@@ -535,6 +537,22 @@ final class MortimerHeartPanel extends PluginPanel
 			offerCards.get(index).renderResult(results.get(index), xpRates.get(index), badge);
 		}
 		refreshLayout();
+	}
+
+	private List<SuperiorOption> variantsFor(HeartTask task)
+	{
+		if (showMonsterVariants)
+		{
+			return task.getSuperiors();
+		}
+		for (SuperiorOption superior : task.getSuperiors())
+		{
+			if (wildernessTask.test(task, superior))
+			{
+				return Collections.singletonList(superior);
+			}
+		}
+		return task.getSuperiors().subList(0, 1);
 	}
 
 	private void refreshLayout()
@@ -613,7 +631,7 @@ final class MortimerHeartPanel extends PluginPanel
 			double fallbackHours = HeartCalculator.calculate(
 				new OfferState(fallback.getTask(), fallback.getSuperior(), fallback.getAmount(),
 					fallback.getDropModifier(), fallback.getXpModifier(), fallback.getKillsPerHour(),
-					fallback.getOverheadHours(), Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
+					fallback.getOverheadHours(), Bracelet.EXPEDITIOUS, fallback.isWilderness()), eliteCa).getTaskHours();
 			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>All offers exceed the 120h target. "
 				+ html(fallback.getTask().getName()) + " is the fallback at " + hours(fallbackHours)
 				+ " with Expeditious.<br>Next offers have a " + chance + " chance to beat this set.</div></html>");
@@ -623,7 +641,7 @@ final class MortimerHeartPanel extends PluginPanel
 			double taskHours = HeartCalculator.calculate(
 				new OfferState(primary.getTask(), primary.getSuperior(), primary.getAmount(),
 					primary.getDropModifier(), primary.getXpModifier(), primary.getKillsPerHour(),
-					primary.getOverheadHours(), Bracelet.EXPEDITIOUS), eliteCa).getTaskHours();
+					primary.getOverheadHours(), Bracelet.EXPEDITIOUS, primary.isWilderness()), eliteCa).getTaskHours();
 			routingTitle.setText("FAST REROLL · " + primary.getTask().getName().toUpperCase(Locale.ROOT));
 			routingDetails.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>Use an Expeditious bracelet · "
 				+ hours(taskHours) + " to new offers.<br>Next offers have a " + chance
@@ -662,7 +680,8 @@ final class MortimerHeartPanel extends PluginPanel
 		boolean heartEligible = task.getBaseHeartRate() > 0.0;
 		double heartPerSuperior = heartEligible ? task.getBaseHeartRate()
 			/ (1.0 + Math.max(0.0, task.getDropModifier()) / 100.0) : Double.POSITIVE_INFINITY;
-		double spawnRate = eliteCa ? 150.0 : 200.0;
+		double spawnRate = task.getSuperiorSpawnRate() > 0.0
+			? task.getSuperiorSpawnRate() : HeartCalculator.superiorSpawnRate(eliteCa, false);
 		double fullKills = detectedBracelet.adjustKills(task.getAssignedAmount());
 		double remainingKills = detectedBracelet.adjustKills(currentRemaining);
 		double taskChance = chance(fullKills, spawnRate * heartPerSuperior);
@@ -684,7 +703,8 @@ final class MortimerHeartPanel extends PluginPanel
 		activeTaskSummary.setText("<html><div style='width:" + ACTIVE_TEXT_WIDTH + "px'>"
 			+ (task.getDropModifier() < 0 ? "Mortimer modifier unavailable"
 				: task.getDropModifier() > 0 ? "+" + trim(task.getDropModifier()) + "% Mortimer heart modifier" : "No Mortimer heart modifier")
-			+ "<br>" + (heartEligible ? "Superior chance 1/" + Math.round(spawnRate) : "No superior spawns")
+			+ "<br>" + (heartEligible ? (spawnRate < HeartCalculator.superiorSpawnRate(eliteCa, false)
+				? "Wilderness superior chance 1/" : "Superior chance 1/") + Math.round(spawnRate) : "No superior spawns")
 			+ heartRates + "</div></html>");
 		expectedDpsValue.setText(heartTask == null ? "Unknown"
 			: String.format(Locale.ENGLISH, "%.2f", selectedVariant == null
@@ -961,12 +981,14 @@ final class MortimerHeartPanel extends PluginPanel
 		{
 			double kph = performance.killsPerHour(detected.getTask(), superior);
 			String heart = superior.canDropHeart() ? "Heart 1/" + Math.round(superior.getHeartRate()) : "No superior roll";
+			boolean wilderness = wildernessTask.test(detected.getTask(), superior);
 			double overheadMinutes = performance.overheadHours(detected.getTask()) * 60.0;
 			summary.setText("<html><div style='width:" + CARD_TEXT_WIDTH + "px'>" + detected.getAmount() + " assigned · "
 				+ (detected.getDropModifier() > 0 ? "+" + trim(detected.getDropModifier()) + "% Heart modifier"
 					: detected.getXpModifier() > 0 ? "+" + trim(detected.getXpModifier()) + "% XP modifier" : "No Heart/XP modifier")
 				+ "<br>" + html(superior.getMonsterName()) + " → " + html(superior.getName())
-				+ " · " + heart
+				+ " · " + heart + (wilderness ? " · Wilderness 1/" + Math.round(
+					HeartCalculator.superiorSpawnRate(eliteCa, true)) : "")
 				+ "<br>" + performance.paceLabel(detected.getTask(), superior) + " · " + Math.round(kph) + " kills/hr"
 				+ (overheadMinutes >= 0.1 ? " · " + Math.round(overheadMinutes) + "m overhead" : "")
 				+ "</div></html>");
@@ -982,7 +1004,8 @@ final class MortimerHeartPanel extends PluginPanel
 			HeartTask task = detected.getTask();
 			double kph = performance.killsPerHour(task, superior);
 			return new OfferState(task, superior, detected.getAmount(), detected.getDropModifier(),
-				detected.getXpModifier(), kph, performance.overheadHours(task), bracelet);
+				detected.getXpModifier(), kph, performance.overheadHours(task), bracelet,
+				wildernessTask.test(task, superior));
 		}
 
 		private void renderResult(HeartResult calculated, double xpPerHour, String badge)

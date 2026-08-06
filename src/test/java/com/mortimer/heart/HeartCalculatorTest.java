@@ -31,6 +31,23 @@ public class HeartCalculatorTest
 	}
 
 	@Test
+	public void wildernessTasksApplyTenPercentSuperiorBonus()
+	{
+		HeartTask abyssalDemons = HeartData.findTask("Abyssal demons");
+		SuperiorOption superior = abyssalDemons.getSuperiors().get(0);
+		OfferState wilderness = new OfferState(abyssalDemons, superior, 150, 0, 0,
+			350, 0, Bracelet.NONE, true);
+
+		HeartResult elite = HeartCalculator.calculate(wilderness, true);
+		HeartResult normal = HeartCalculator.calculate(wilderness, false);
+
+		assertEquals(135.0, HeartCalculator.superiorSpawnRate(true, true), 0.00001);
+		assertEquals(180.0, HeartCalculator.superiorSpawnRate(false, true), 0.00001);
+		assertEquals(135.0 * superior.getHeartRate(), elite.getHeartPerKill(), 0.00001);
+		assertEquals(180.0 * superior.getHeartRate(), normal.getHeartPerKill(), 0.00001);
+	}
+
+	@Test
 	public void combinedChanceIsGreaterThanEitherOfferAlone()
 	{
 		HeartTask smoke = HeartData.findTask("Smoke devils");
